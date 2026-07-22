@@ -68,24 +68,36 @@ The WeChat endpoint exchanges the temporary code on the server. It never returns
 
 ## Dinner Household
 
-All household endpoints require a bearer token. Each user can belong to one household and each household can contain at most two users.
+All household endpoints require a bearer token. V8 models membership as immutable history plus at most one `ACTIVE` row per user, exactly one active `OWNER` per household, and no more than two occupied active seats. The server derives the authenticated user, household and role from locked database state. `actorMembershipId`, target membership IDs and versions are untrusted optimistic-concurrency inputs only: no client-supplied user ID, household ID or role grants authority.
 
-| Method | Path                                         | Request body    | Response data                                     |
-| ------ | -------------------------------------------- | --------------- | ------------------------------------------------- |
-| GET    | `/api/dinner/household`                      | None            | Household summary, or omitted `data` when unbound |
-| POST   | `/api/dinner/households`                     | Optional `name` | Household, invite code, expiry                    |
-| POST   | `/api/dinner/households/invite-code/refresh` | None            | Household, replacement invite code, expiry        |
-| POST   | `/api/dinner/households/join`                | `inviteCode`    | Household summary                                 |
+| Method | Path                                                | Request body | Response data |
+| ------ | --------------------------------------------------- | ------------ | ------------- |
+| GET    | `/api/dinner/household`                             | None | Household summary, or JSON `null` when unbound |
+| GET    | `/api/dinner/household/members`                     | None | One management snapshot: `household`, ordered active `members`, `invite` |
+| PUT    | `/api/dinner/household`                             | `name`, `expectedVersion` | Updated household summary |
+| GET    | `/api/dinner/household/invite-code`                 | None | Current hash-only invite status |
+| POST   | `/api/dinner/households`                            | Optional `name` | Household, one-time plaintext invite and expiry |
+| POST   | `/api/dinner/households/invite-code/refresh`        | None | Household, replacement one-time plaintext invite and expiry |
+| POST   | `/api/dinner/household/invite-code/revocation`      | None | Updated invite status |
+| POST   | `/api/dinner/households/join`                       | `inviteCode` | Household summary |
+| POST   | `/api/dinner/household/members/me/leave`            | `actorMembershipId`, `expectedVersion`, UUID v4 `idempotencyKey` | Mutation result |
+| POST   | `/api/dinner/household/members/{membershipId}/removal` | `actorMembershipId`, `expectedVersion`, `targetMembershipVersion`, UUID v4 `idempotencyKey` | Mutation result |
+| POST   | `/api/dinner/household/ownership-transfer`          | `actorMembershipId`, `expectedVersion`, `targetMembershipId`, `targetMembershipVersion`, UUID v4 `idempotencyKey` | Mutation result |
+| POST   | `/api/dinner/household/dissolution`                 | `actorMembershipId`, `expectedVersion`, `householdName`, fresh WeChat `code`, UUID v4 `idempotencyKey` | Mutation result |
 
-Household summary fields are `id`, `name`, `timezone`, and `memberCount`. Create and refresh responses add `inviteCode` and ISO-8601 `inviteExpiresAt`. Invite codes expire after 24 hours; only a keyed digest is persisted.
+A household summary contains `id`, `name`, `timezone`, `memberCount`, `version`, `inviteRevision`, `myRole`, `myMembershipId`, and `myMembershipVersion`. A management member contains only `membershipId`, `version`, `role`, viewer-relative `relation` (`ME` or `PARTNER`), and UTC `joinedAt`; username, profile data and internal user ID are never returned. The management endpoint reads the household, member list and invite status in one repeatable-read snapshot.
 
-Household business errors are `DINNER_INVITE_INVALID`, `DINNER_INVITE_EXPIRED`, `DINNER_HOUSEHOLD_FULL`, and `DINNER_ALREADY_IN_HOUSEHOLD`.
+Invite status is `{state, inviteRevision, expiresAt, createdByMe}`, where `state` is `ACTIVE`, `EXPIRED`, or `NONE`. Create/refresh adds `inviteCode` and repeats the resulting `inviteRevision` and UTC `inviteExpiresAt`. Plaintext is returned exactly once and is never recoverable from later reads; only its keyed digest is stored. New codes expire 24 hours after creation. V8 normalizes legacy open-code expiry to no later than 24 hours after creation, revokes every open invite for a two-member household, and retains at most one open invite per household. Joining consumes that invite atomically and advances both household and invite revisions; refresh, explicit revocation, membership change and dissolution invalidate applicable open codes.
+
+Mutation responses are `{operationType, replayed, actorHasHousehold, householdVersion}`. Leave, remove, transfer and dissolution keys are retained for 14 days. Reusing the same UUID v4 with the same fingerprint replays the stored response, including after membership or household deletion; using it for a different request returns `DINNER_HOUSEHOLD_OPERATION_CONFLICT`. A member may leave; an owner must transfer ownership or dissolve. Removal, transfer and dissolution are owner-only. Dissolution also requires the exact current household name and a fresh WeChat identity matching the authenticated account.
+
+Household errors are `DINNER_INVITE_INVALID`, `DINNER_INVITE_EXPIRED`, `DINNER_HOUSEHOLD_FULL`, `DINNER_ALREADY_IN_HOUSEHOLD`, `DINNER_HOUSEHOLD_REQUIRED`, `DINNER_HOUSEHOLD_VERSION_CONFLICT`, `DINNER_HOUSEHOLD_OWNER_REQUIRED`, `DINNER_HOUSEHOLD_OWNER_CANNOT_LEAVE`, `DINNER_HOUSEHOLD_MEMBER_NOT_FOUND`, `DINNER_HOUSEHOLD_MEMBER_STATE_CONFLICT`, `DINNER_HOUSEHOLD_NAME_MISMATCH`, `DINNER_HOUSEHOLD_NAME_REJECTED`, `DINNER_HOUSEHOLD_MODERATION_UNAVAILABLE`, `DINNER_HOUSEHOLD_IDENTITY_MISMATCH`, and `DINNER_HOUSEHOLD_OPERATION_CONFLICT`, in addition to shared authentication and validation errors.
 
 ## Dinner Ingredients, Inventory, And Recipe Discovery
 
 Flyway migration `V5__add_recipe_ingredients_and_household_inventory.sql` adds the standard ingredient catalog, recipe requirements, and per-household inventory. Ingredient and recipe requirement quantities use `DECIMAL(12,3)` and may be `null`; units are required. Inventory rows have their own optimistic `version` and record the last updating user and database-managed timestamp. Persisted inventory versions start at `1`; request version `0` is reserved exclusively for create-only intent. Inventory `DATETIME(3)` values are database-local `Asia/Shanghai` timestamps and are converted from that explicit zone to ISO-8601 UTC instants in API responses.
 
-All routes in this section require a bearer token. The client never supplies a household ID: the service looks up an existing `dinner_household_members` row for the authenticated user and uses its `householdId` for catalog visibility, inventory reads/writes, and recipe matching. The membership schema has no status column. Ingredient and inventory services do not load or check the referenced household's status; recipe discovery additionally requires the referenced household to exist with status `ACTIVE`. A user without a membership row, or a discovery request whose household is missing or inactive, receives HTTP 403 with `FORBIDDEN` and message `Access is denied`.
+All routes in this section require a bearer token. The client never supplies a household ID: the service resolves the authenticated user's `ACTIVE` membership and uses its `householdId` for catalog visibility, inventory reads/writes, and recipe matching. Ingredient, inventory and recipe discovery require a valid active household context. A user without one receives HTTP 403 with `FORBIDDEN` and message `Access is denied`.
 
 | Method | Path                                   | Request                                           | Response data                      |
 | ------ | -------------------------------------- | ------------------------------------------------- | ---------------------------------- |
@@ -311,7 +323,7 @@ Flyway migration `V7__connect_household_recipes_to_menus.sql` adds `recipe_versi
 
 ## Dinner Menu And Records
 
-All menu and record endpoints require a bearer token and an existing household membership row; the membership schema has no status column. `DinnerMenuService` operations and `DinnerRecordService.complete` additionally load the referenced household and reject a missing or non-`ACTIVE` household. Record list and detail only require the membership row and scope results by its `householdId`. The server derives the household and current user from the token.
+All menu and record endpoints require a bearer token and an `ACTIVE` household membership. `DinnerMenuService` operations and `DinnerRecordService.complete` additionally lock or validate the active household aggregate. Record list and detail scope results by that active membership's `householdId` and `historyVisibleFrom`. The server derives the household and current user from the token.
 
 | Method | Path                                 | Request body                        | Response data                    |
 | ------ | ------------------------------------ | ----------------------------------- | -------------------------------- |
@@ -322,9 +334,11 @@ All menu and record endpoints require a bearer token and an existing household m
 | GET    | `/api/dinner/records`                | None                                | Completed record summaries       |
 | GET    | `/api/dinner/records/{id}`           | None                                | Record detail and dish snapshots |
 
-The menu business day changes at 04:00 in the household timezone. `TodayMenuResponse` contains `id`, `menuDate`, `status`, `version`, `mySelectionCount`, `partnerSelectionCount`, `consensusCount`, `selectedRecipeIds`, merged `dishes`, confirmation/completion metadata, and optional `recordId`. Dish `source` is relative to the current user: `ME`, `PARTNER`, or `BOTH`.
+The menu business day changes at 04:00 in the household timezone. `TodayMenuResponse` contains `id`, `menuDate`, `status`, `version`, `mySelectionCount`, `partnerSelectionCount`, `consensusCount`, `selectedRecipeIds`, merged `dishes`, confirmation/completion metadata, optional `recordId`, and `historyVisible`. A completed menu strictly before the viewer's UTC `historyVisibleFrom` is returned as `{menuDate,status:"PRE_MEMBERSHIP",historyVisible:false}` with no menu, recipe, record, dish or actor identifiers. The inclusive boundary is visible. Record list/detail apply the same UTC boundary, with stable `(completedAt,id)` ordering.
 
-Each merged menu dish contains `recipeId`, `name`, `imagePath`, `category`, `flavor`, `estimatedMinutes`, `source`, `scope`, `recipeVersion`, and nullable `method`. The `method` field is the selected default-method summary `{id, name, cookingStyle}`. When selections are replaced, the server validates every recipe and persists its identity in `dinner_menu_selections`: a system recipe is saved and returned with `scope: "SYSTEM"`, `recipeVersion: 1`, and `method: null`; a household recipe is saved with its current positive aggregate version and active default-method ID, then returned with `scope: "HOUSEHOLD"`, that saved `recipeVersion`, and the corresponding nonblank method summary. If both members select the same recipe, their saved version and method identities must agree.
+Actors are privacy-safe objects `{kind}`. `kind` is `ME`, current `PARTNER`, `EXITED_MEMBER`, or `DELETED_MEMBER`; arrays are deduplicated by internal user identity and emitted in that relation order. Today-menu `confirmedBy`/`completedBy`, record `completedBy`, and each menu/record dish's `selectedBy` use this shape. `source` remains `ME`, `PARTNER`, or `BOTH` only when those current-member combinations apply; historical combinations rely on `selectedBy`. No wire response exposes actor user IDs, deleted usernames, or a raw-name fallback.
+
+Each merged menu dish contains `recipeId`, `name`, `imagePath`, `category`, `flavor`, `estimatedMinutes`, `source`, `selectedBy`, `scope`, `recipeVersion`, and nullable `method`. The `method` field is the selected default-method summary `{id, name, cookingStyle}`. When selections are replaced, the server validates every recipe and persists its identity in `dinner_menu_selections`: a system recipe is saved and returned with `scope: "SYSTEM"`, `recipeVersion: 1`, and `method: null`; a household recipe is saved with its current positive aggregate version and active default-method ID, then returned with `scope: "HOUSEHOLD"`, that saved `recipeVersion`, and the corresponding nonblank method summary. If both members select the same recipe, their saved version and method identities must agree.
 
 Example merged household menu dish:
 

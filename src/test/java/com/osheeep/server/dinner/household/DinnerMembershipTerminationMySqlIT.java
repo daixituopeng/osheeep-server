@@ -14,21 +14,27 @@ import com.osheeep.server.dinner.household.mapper.DinnerHouseholdMemberMapper;
 import com.osheeep.server.dinner.household.mapper.DinnerHouseholdOperationMapper;
 import com.osheeep.server.dinner.recipe.DinnerCustomRecipeFlywayMigrationStrategy;
 import java.math.BigDecimal;
+import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.Mockito;
 import org.mockito.stubbing.Answer;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,6 +48,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * MySQL acceptance coverage for the transaction guarantees that mocks cannot prove.
@@ -59,6 +66,11 @@ class DinnerMembershipTerminationMySqlIT {
 
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private DinnerHouseholdOperationService operationService;
+    @Autowired private DinnerHouseholdWriteService writeService;
+    @Autowired private DinnerHouseholdDissolutionTransaction dissolutionTransaction;
+    @Autowired private DinnerAccountCleanupService accountCleanupService;
+    @Autowired private HouseholdOperationFingerprinter fingerprinter;
+    @Autowired private TransactionTemplate transactionTemplate;
     @MockitoSpyBean private DinnerHouseholdOperationMapper operationMapper;
     @MockitoSpyBean private DinnerHouseholdMemberMapper memberMapper;
 
@@ -139,6 +151,10 @@ class DinnerMembershipTerminationMySqlIT {
                     "DELETE FROM dinner_household_members WHERE household_id = ?", householdId);
             jdbcTemplate.update("DELETE FROM dinner_households WHERE id = ?", householdId);
         }
+        jdbcTemplate.update(
+                "DELETE FROM wechat_user_identities WHERE user_id IN (?, ?)",
+                ownerUserId,
+                memberUserId);
         if (memberUserId != null) {
             jdbcTemplate.update("DELETE FROM users WHERE id = ?", memberUserId);
         }
@@ -214,6 +230,272 @@ class DinnerMembershipTerminationMySqlIT {
 
         assertThat(insertAttempts).hasValue(1);
         assertOriginalAggregateState(key);
+    }
+
+    @Test
+    void leaveThenRejoinCreatesANewHistoryWindowAndConsumesTheReplacementInvite() {
+        operationService.leave(
+                memberUserId, memberMembershipId, 1L, UUID.randomUUID().toString());
+
+        var generated = writeService.refreshInvite(ownerUserId);
+        var joined = writeService.join(memberUserId, generated.inviteCode());
+
+        assertThat(joined.myMembershipId()).isNotEqualTo(memberMembershipId);
+        assertThat(joined.myMembershipVersion()).isEqualTo(1L);
+        assertThat(count(
+                "SELECT COUNT(*) FROM dinner_household_members "
+                        + "WHERE household_id = ? AND user_id = ? AND status = 'LEFT' "
+                        + "AND history_visible_from < ended_at",
+                householdId,
+                memberUserId)).isEqualTo(1);
+        assertThat(count(
+                "SELECT COUNT(*) FROM dinner_household_members "
+                        + "WHERE household_id = ? AND user_id = ? AND status = 'ACTIVE' "
+                        + "AND history_visible_from = joined_at",
+                householdId,
+                memberUserId)).isEqualTo(1);
+        assertThat(count(
+                "SELECT COUNT(*) FROM dinner_invite_codes "
+                        + "WHERE household_id = ? AND consumed_by = ? "
+                        + "AND consumed_at IS NOT NULL AND open_household_id IS NULL",
+                householdId,
+                memberUserId)).isEqualTo(1);
+    }
+
+    @Test
+    void ownershipTransferSwapsRolesAndAdvancesTheHouseholdVersion() {
+        var response = operationService.transferOwnership(
+                ownerUserId,
+                ownerMembershipId,
+                1L,
+                memberMembershipId,
+                1L,
+                UUID.randomUUID().toString());
+
+        assertThat(response.operationType())
+                .isEqualTo(DinnerHouseholdOperationService.OWNERSHIP_TRANSFER);
+        assertThat(response.householdVersion()).isEqualTo(2L);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT CONCAT(role, '|', version) FROM dinner_household_members WHERE id = ?",
+                String.class,
+                ownerMembershipId)).isEqualTo("MEMBER|2");
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT CONCAT(role, '|', version) FROM dinner_household_members WHERE id = ?",
+                String.class,
+                memberMembershipId)).isEqualTo("OWNER|2");
+        assertThat(count(
+                "SELECT COUNT(*) FROM dinner_invite_codes WHERE id = ? "
+                        + "AND revoked_at IS NULL AND consumed_at IS NULL",
+                inviteId)).isEqualTo(1);
+    }
+
+    @Test
+    void currentMemberAccountCleanupPreservesHouseholdAndEndsMembership() {
+        transactionTemplate.executeWithoutResult(ignored -> accountCleanupService.removeUser(
+                memberUserId, LocalDateTime.of(2026, 7, 22, 8, 0)));
+
+        assertThat(count("SELECT COUNT(*) FROM dinner_households WHERE id = ?", householdId))
+                .isEqualTo(1);
+        assertThat(count(
+                "SELECT COUNT(*) FROM dinner_household_members WHERE id = ?",
+                memberMembershipId)).isZero();
+        assertThat(count(
+                "SELECT COUNT(*) FROM dinner_household_members "
+                        + "WHERE id = ? AND role = 'OWNER' AND status = 'ACTIVE'",
+                ownerMembershipId)).isEqualTo(1);
+        assertThat(count(
+                "SELECT COUNT(*) FROM dinner_menu_selections WHERE user_id = ?", memberUserId))
+                .isZero();
+    }
+
+    @Test
+    void dissolutionPurgesTheAggregateButRetainsTheIdempotentResult() {
+        String openid = "task9_" + suffix;
+        jdbcTemplate.update(
+                "INSERT INTO wechat_user_identities (user_id, openid) VALUES (?, ?)",
+                ownerUserId,
+                openid);
+        String key = UUID.randomUUID().toString();
+        String householdName = jdbcTemplate.queryForObject(
+                "SELECT name FROM dinner_households WHERE id = ?", String.class, householdId);
+        String fingerprint = fingerprinter.fingerprint(
+                DinnerHouseholdDissolutionService.HOUSEHOLD_DISSOLUTION,
+                ownerMembershipId,
+                1L,
+                null,
+                null,
+                householdName);
+        var command = new DinnerHouseholdOperationService.HouseholdOperationCommand(
+                ownerUserId,
+                ownerMembershipId,
+                1L,
+                null,
+                null,
+                DinnerHouseholdDissolutionService.HOUSEHOLD_DISSOLUTION,
+                key,
+                fingerprint);
+
+        var response = dissolutionTransaction.dissolve(command, householdName, openid);
+
+        assertThat(response.actorHasHousehold()).isFalse();
+        assertThat(response.householdVersion()).isNull();
+        assertThat(count("SELECT COUNT(*) FROM dinner_households WHERE id = ?", householdId))
+                .isZero();
+        assertThat(count(
+                "SELECT COUNT(*) FROM dinner_household_operations "
+                        + "WHERE actor_id = ? AND idempotency_key = ?",
+                ownerUserId,
+                key)).isEqualTo(1);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("householdLockCompetitions")
+    @Timeout(20)
+    void householdLifecycleCompetitionsSerializeOnTheAggregateLock(
+            String competition,
+            String firstMutation,
+            String secondMutation
+    ) throws Exception {
+        CountDownLatch firstHasHouseholdLock = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        CountDownLatch secondIsAttemptingLock = new CountDownLatch(1);
+
+        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+            Future<Void> first = executor.submit(() -> {
+                runAggregateTransaction(
+                        firstMutation,
+                        firstHasHouseholdLock,
+                        releaseFirst,
+                        null);
+                return null;
+            });
+            assertThat(firstHasHouseholdLock.await(5, TimeUnit.SECONDS))
+                    .as(competition + " first operation acquired household lock")
+                    .isTrue();
+
+            Future<Void> second = executor.submit(() -> {
+                runAggregateTransaction(
+                        secondMutation,
+                        null,
+                        null,
+                        secondIsAttemptingLock);
+                return null;
+            });
+            assertThat(secondIsAttemptingLock.await(5, TimeUnit.SECONDS))
+                    .as(competition + " second operation reached household lock")
+                    .isTrue();
+            assertThatThrownBy(() -> second.get(250, TimeUnit.MILLISECONDS))
+                    .as(competition + " must block instead of observing a partial aggregate")
+                    .isInstanceOf(TimeoutException.class);
+
+            releaseFirst.countDown();
+            first.get(5, TimeUnit.SECONDS);
+            second.get(5, TimeUnit.SECONDS);
+        } finally {
+            releaseFirst.countDown();
+        }
+    }
+
+    @Test
+    void unrelatedIntegrityViolationRemainsAFullInternalRollback() throws Exception {
+        String attemptedName = "rolled_back_household_" + suffix;
+        try (var connection = jdbcTemplate.getDataSource().getConnection()) {
+            connection.setAutoCommit(false);
+            try {
+                try (var insertHousehold = connection.prepareStatement(
+                        "INSERT INTO dinner_households (name, created_by) VALUES (?, ?)",
+                        java.sql.Statement.RETURN_GENERATED_KEYS)) {
+                    insertHousehold.setString(1, attemptedName);
+                    insertHousehold.setLong(2, ownerUserId);
+                    insertHousehold.executeUpdate();
+                }
+                try (var duplicateActiveUser = connection.prepareStatement(
+                        "INSERT INTO dinner_household_members "
+                                + "(household_id, user_id, joined_at, role, status, seat_no, "
+                                + "history_visible_from) "
+                                + "VALUES ((SELECT id FROM dinner_households WHERE name = ?), "
+                                + "?, UTC_TIMESTAMP(3), 'MEMBER', 'ACTIVE', 1, UTC_TIMESTAMP(3))")) {
+                    duplicateActiveUser.setString(1, attemptedName);
+                    duplicateActiveUser.setLong(2, memberUserId);
+                    assertThatThrownBy(duplicateActiveUser::executeUpdate)
+                            .isInstanceOf(SQLException.class)
+                            .extracting(throwable -> ((SQLException) throwable).getSQLState())
+                            .isEqualTo("23000");
+                }
+            } finally {
+                connection.rollback();
+            }
+        }
+        assertThat(count(
+                "SELECT COUNT(*) FROM dinner_households WHERE name = ?", attemptedName))
+                .isZero();
+    }
+
+    private static java.util.stream.Stream<Arguments> householdLockCompetitions() {
+        return java.util.stream.Stream.of(
+                Arguments.of(
+                        "exit x menu update",
+                        "UPDATE dinner_household_members SET version = version + 1 WHERE id = ?",
+                        "UPDATE dinner_menus SET version = version + 1 WHERE id = ?"),
+                Arguments.of(
+                        "remove x complete",
+                        "UPDATE dinner_household_members SET version = version + 1 WHERE id = ?",
+                        "UPDATE dinner_menus SET version = version + 1 WHERE id = ?"),
+                Arguments.of(
+                        "transfer x invite refresh",
+                        "UPDATE dinner_household_members SET version = version + 1 WHERE id = ?",
+                        "UPDATE dinner_invite_codes SET expires_at = DATE_ADD(expires_at, INTERVAL 1 SECOND) WHERE id = ?"),
+                Arguments.of(
+                        "deletion x publish",
+                        "UPDATE dinner_household_members SET version = version + 1 WHERE id = ?",
+                        "UPDATE dinner_recipes SET version = version + 1 WHERE id = ?"),
+                Arguments.of(
+                        "dissolution x inventory update",
+                        "UPDATE dinner_households SET version = version + 1 WHERE id = ?",
+                        "UPDATE dinner_household_inventory SET version = version + 1 WHERE id = ?"));
+    }
+
+    private void runAggregateTransaction(
+            String mutation,
+            CountDownLatch locked,
+            CountDownLatch release,
+            CountDownLatch attempting
+    ) throws Exception {
+        try (var connection = jdbcTemplate.getDataSource().getConnection()) {
+            connection.setAutoCommit(false);
+            try {
+                if (attempting != null) {
+                    attempting.countDown();
+                }
+                try (var householdLock = connection.prepareStatement(
+                        "SELECT id FROM dinner_households WHERE id = ? FOR UPDATE")) {
+                    householdLock.setLong(1, householdId);
+                    try (var rows = householdLock.executeQuery()) {
+                        assertThat(rows.next()).isTrue();
+                    }
+                }
+                if (locked != null) {
+                    locked.countDown();
+                }
+                if (release != null) {
+                    assertThat(release.await(5, TimeUnit.SECONDS)).isTrue();
+                }
+                try (var update = connection.prepareStatement(mutation)) {
+                    long targetId = mutation.contains("dinner_menus") ? menuId
+                            : mutation.contains("dinner_invite_codes") ? inviteId
+                            : mutation.contains("dinner_recipes") ? draftRecipeId
+                            : mutation.contains("dinner_household_inventory") ? inventoryId
+                            : mutation.contains("dinner_households") ? householdId
+                            : memberMembershipId;
+                    update.setLong(1, targetId);
+                    assertThat(update.executeUpdate()).isEqualTo(1);
+                }
+                connection.commit();
+            } catch (Exception exception) {
+                connection.rollback();
+                throw exception;
+            }
+        }
     }
 
     private void assertCommittedTermination(String key) {

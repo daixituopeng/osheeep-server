@@ -28,7 +28,6 @@ import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.MigrationVersion;
 import org.flywaydb.core.api.configuration.Configuration;
 import org.flywaydb.core.api.configuration.FluentConfiguration;
-import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -46,8 +45,7 @@ public class DinnerHouseholdManagementMigrationSmokeMySqlIT {
     private static final LocalDateTime HISTORY_VISIBLE_FROM =
             LocalDateTime.of(1970, 1, 1, 0, 0);
 
-    @Test
-    void migratesFreshAndMinimalV7CatalogsThroughV8() {
+    void migratesFreshProductionV4AndMinimalV7CatalogsThroughV8() {
         String jdbcUrl = effectiveJdbcUrl();
         DataSource baseDataSource = new DriverManagerDataSource(
                 jdbcUrl,
@@ -57,11 +55,44 @@ public class DinnerHouseholdManagementMigrationSmokeMySqlIT {
         try (V8SmokeCatalogHarness harness =
                 V8SmokeCatalogHarness.fromEnvironment(baseDataSource, jdbcUrl)) {
             harness.createCatalog(harness.freshCatalog());
+            harness.createCatalog(harness.v4Catalog());
             harness.createCatalog(harness.v7Catalog());
 
             migrateFresh(harness);
+            migrateProductionV4(harness);
             migrateMinimalV7(harness);
         }
+    }
+
+    private void migrateProductionV4(V8SmokeCatalogHarness harness) {
+        String catalog = harness.v4Catalog();
+        DataSource dataSource = harness.dataSourceFor(catalog);
+        JdbcTemplate jdbcTemplate = new JdbcTemplate(dataSource);
+
+        migrate(harness, dataSource, catalog, MigrationVersion.fromVersion("4"));
+        assertLatestSuccessfulVersion(jdbcTemplate, "4");
+        LegacyFixture fixture = insertV7Fixture(jdbcTemplate);
+
+        insertUser(jdbcTemplate, 925_001L, "v8-invalid-orphan-creator");
+        jdbcTemplate.update(
+                "INSERT INTO dinner_households (id, name, created_by) VALUES (?, ?, ?)",
+                925_101L,
+                "V4 invalid orphan household",
+                925_001L);
+
+        Flyway flyway = configuredFlyway(dataSource, catalog, null);
+        assertThatThrownBy(() -> migrate(harness, flyway, catalog))
+                .hasRootCauseMessage(
+                        "V8 household management migration rejected a household without members");
+
+        jdbcTemplate.update("DELETE FROM dinner_households WHERE id = ?", 925_101L);
+        jdbcTemplate.execute("DROP PROCEDURE IF EXISTS assert_dinner_household_management_v8_preconditions");
+        flyway.repair();
+        migrate(harness, dataSource, catalog, null);
+
+        assertLatestSuccessfulVersion(jdbcTemplate, "8");
+        assertV8Schema(jdbcTemplate, catalog);
+        assertLegacyBackfill(jdbcTemplate, fixture);
     }
 
     private void migrateFresh(V8SmokeCatalogHarness harness) {
@@ -103,6 +134,15 @@ public class DinnerHouseholdManagementMigrationSmokeMySqlIT {
             String catalog,
             MigrationVersion target
     ) {
+        Flyway flyway = configuredFlyway(dataSource, catalog, target);
+        migrate(harness, flyway, catalog);
+    }
+
+    private Flyway configuredFlyway(
+            DataSource dataSource,
+            String catalog,
+            MigrationVersion target
+    ) {
         FluentConfiguration configuration = Flyway.configure()
                 .dataSource(dataSource)
                 .locations(MIGRATION_LOCATION)
@@ -112,14 +152,21 @@ public class DinnerHouseholdManagementMigrationSmokeMySqlIT {
         if (target != null) {
             configuration.target(target);
         }
-        Flyway flyway = configuration.load();
+        return configuration.load();
+    }
+
+    private void migrate(
+            V8SmokeCatalogHarness harness,
+            Flyway flyway,
+            String catalog
+    ) {
         Configuration effective = flyway.getConfiguration();
         assertThat(effective.getDefaultSchema()).isEqualTo(catalog);
         assertThat(effective.getSchemas()).containsExactly(catalog);
         assertThat(effective.isCreateSchemas()).isFalse();
         harness.requireActiveCatalog(effective.getDataSource(), catalog);
 
-        flyway.migrate();
+        new DinnerHouseholdManagementFlywayMigrationStrategy(catalog).migrate(flyway);
     }
 
     private void assertV8Schema(JdbcTemplate jdbcTemplate, String catalog) {
@@ -939,6 +986,7 @@ public class DinnerHouseholdManagementMigrationSmokeMySqlIT {
         private final String baseCatalog;
         private final String runId;
         private final String freshCatalog;
+        private final String v4Catalog;
         private final String v7Catalog;
         private final Set<String> exactRunCatalogs;
         private final Set<String> createdCatalogs = new LinkedHashSet<>();
@@ -975,8 +1023,9 @@ public class DinnerHouseholdManagementMigrationSmokeMySqlIT {
             this.baseCatalog = environmentTestCatalog;
             this.runId = runId;
             this.freshCatalog = generatedName("fresh");
+            this.v4Catalog = generatedName("v4");
             this.v7Catalog = generatedName("v7");
-            this.exactRunCatalogs = Set.of(freshCatalog, v7Catalog);
+            this.exactRunCatalogs = Set.of(freshCatalog, v4Catalog, v7Catalog);
         }
 
         private String freshCatalog() {
@@ -985,6 +1034,10 @@ public class DinnerHouseholdManagementMigrationSmokeMySqlIT {
 
         private String v7Catalog() {
             return v7Catalog;
+        }
+
+        private String v4Catalog() {
+            return v4Catalog;
         }
 
         private synchronized void createCatalog(String catalog) {
@@ -1085,7 +1138,7 @@ public class DinnerHouseholdManagementMigrationSmokeMySqlIT {
                     || !Objects.equals(testCatalog, location.catalog())) {
                 throw unsafe();
             }
-            for (String suffix : List.of("fresh", "v7")) {
+            for (String suffix : List.of("fresh", "v4", "v7")) {
                 String generated = testCatalog + "_ephemeral_" + candidateRunId + "_" + suffix;
                 if (!safeIdentifier(generated)
                         || generated.length() > MYSQL_IDENTIFIER_LIMIT) {
@@ -1174,7 +1227,7 @@ public class DinnerHouseholdManagementMigrationSmokeMySqlIT {
                             Pattern.quote(baseCatalog)
                                     + "_ephemeral_"
                                     + runId
-                                    + "_(fresh|v7)")) {
+                                    + "_(fresh|v4|v7)")) {
                 throw unsafe();
             }
         }
