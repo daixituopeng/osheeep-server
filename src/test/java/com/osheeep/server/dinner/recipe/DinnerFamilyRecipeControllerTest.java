@@ -15,6 +15,7 @@ import com.osheeep.server.common.error.BusinessException;
 import com.osheeep.server.common.error.ErrorCode;
 import com.osheeep.server.common.security.CurrentUser;
 import com.osheeep.server.common.security.JwtService;
+import com.osheeep.server.dinner.household.dto.HouseholdActorResponse;
 import com.osheeep.server.dinner.image.dto.ImageAssetResponse;
 import com.osheeep.server.dinner.recipe.dto.FamilyRecipeListItemResponse;
 import com.osheeep.server.dinner.recipe.dto.FamilyRecipeTab;
@@ -129,8 +130,10 @@ class DinnerFamilyRecipeControllerTest {
                 new FamilyRecipeListItemResponse(
                         101L, "PUBLISHED", "番茄炒蛋",
                         "https://assets.test/media/recipes/tomato.webp",
-                        "家常菜", "咸鲜", 2, 15, 4L, 7L, "小羊",
-                        8L, "伙伴", "PREVIEW", Instant.parse("2026-07-16T12:30:00Z"))));
+                        "家常菜", "咸鲜", 2, 15, 4L,
+                        new HouseholdActorResponse("ME"),
+                        new HouseholdActorResponse("PARTNER"),
+                        "PREVIEW", Instant.parse("2026-07-16T12:30:00Z"))));
 
         mockMvc.perform(authenticated(get("/api/dinner/recipes/family")
                         .queryParam("tab", "PUBLISHED")))
@@ -146,10 +149,12 @@ class DinnerFamilyRecipeControllerTest {
                 .andExpect(jsonPath("$.data[0].servings").value(2))
                 .andExpect(jsonPath("$.data[0].estimatedMinutes").value(15))
                 .andExpect(jsonPath("$.data[0].version").value(4))
-                .andExpect(jsonPath("$.data[0].creatorId").value(7))
-                .andExpect(jsonPath("$.data[0].creatorName").value("小羊"))
-                .andExpect(jsonPath("$.data[0].lastModifiedBy").value(8))
-                .andExpect(jsonPath("$.data[0].lastModifiedByName").value("伙伴"))
+                .andExpect(jsonPath("$.data[0].creator.kind").value("ME"))
+                .andExpect(jsonPath("$.data[0].lastModifier.kind").value("PARTNER"))
+                .andExpect(jsonPath("$.data[0].creatorId").doesNotExist())
+                .andExpect(jsonPath("$.data[0].creatorName").doesNotExist())
+                .andExpect(jsonPath("$.data[0].lastModifiedBy").doesNotExist())
+                .andExpect(jsonPath("$.data[0].lastModifiedByName").doesNotExist())
                 .andExpect(jsonPath("$.data[0].completedStep").value("PREVIEW"))
                 .andExpect(jsonPath("$.data[0].updatedAt").value("2026-07-16T12:30:00Z"));
         verify(queryService).list(7L, FamilyRecipeTab.PUBLISHED);

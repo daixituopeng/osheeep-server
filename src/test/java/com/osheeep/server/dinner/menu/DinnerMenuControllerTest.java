@@ -14,6 +14,7 @@ import com.osheeep.server.common.error.BusinessException;
 import com.osheeep.server.common.error.ErrorCode;
 import com.osheeep.server.common.security.CurrentUser;
 import com.osheeep.server.common.security.JwtService;
+import com.osheeep.server.dinner.household.dto.HouseholdActorResponse;
 import com.osheeep.server.dinner.menu.dto.TodayMenuResponse;
 import com.osheeep.server.dinner.menu.dto.MenuDishResponse;
 import com.osheeep.server.dinner.recipe.DinnerRecipeService;
@@ -153,13 +154,15 @@ class DinnerMenuControllerTest {
     @Test
     void readsRecordListAndDetail() throws Exception {
         when(recordService.list(7L)).thenReturn(List.of(new RecordSummaryResponse(
-                91L, LocalDate.of(2026, 7, 11), 7L,
+                91L, LocalDate.of(2026, 7, 11), new HouseholdActorResponse("ME"),
                 Instant.parse("2026-07-11T11:00:00Z"), 1)));
         when(recordService.detail(7L, 91L)).thenReturn(new RecordDetailResponse(
-                91L, LocalDate.of(2026, 7, 11), 7L,
+                91L, LocalDate.of(2026, 7, 11), new HouseholdActorResponse("ME"),
                 Instant.parse("2026-07-11T11:00:00Z"),
                 List.of(new RecordDishResponse(
                         14L, "番茄炒蛋", null, "家常菜", "酸甜", 10, "BOTH",
+                        List.of(new HouseholdActorResponse("ME"),
+                                new HouseholdActorResponse("PARTNER")),
                         "HOUSEHOLD", 8L, 2,
                         new RecordMethodSnapshotResponse(
                                 21L, "家常做法", "炒",
@@ -169,10 +172,14 @@ class DinnerMenuControllerTest {
 
         mockMvc.perform(authenticated(get("/api/dinner/records")))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].completedBy.kind").value("ME"))
                 .andExpect(jsonPath("$.data[0].dishCount").value(1));
         mockMvc.perform(authenticated(get("/api/dinner/records/91")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.dishes[0].source").value("BOTH"))
+                .andExpect(jsonPath("$.data.dishes[0].selectedBy[0].kind").value("ME"))
+                .andExpect(jsonPath("$.data.dishes[0].selectedBy[1].kind").value("PARTNER"))
+                .andExpect(jsonPath("$.data.dishes[0].selectedBy[0].id").doesNotExist())
                 .andExpect(jsonPath("$.data.dishes[0].scope").value("HOUSEHOLD"))
                 .andExpect(jsonPath("$.data.dishes[0].recipeVersion").value(8))
                 .andExpect(jsonPath("$.data.dishes[0].servings").value(2))
@@ -194,7 +201,9 @@ class DinnerMenuControllerTest {
                 List.of(new MenuDishResponse(
                         14L, "番茄炒蛋",
                         "https://www.osheeep.com/media/recipes/family.webp",
-                        "家常菜", "酸甜", 10, "ME", "HOUSEHOLD", 8L,
+                        "家常菜", "酸甜", 10, "ME",
+                        List.of(new HouseholdActorResponse("ME")),
+                        "HOUSEHOLD", 8L,
                         new RecipeMethodSummaryResponse(21L, "家常做法", "炒"))),
                 null, null, null, null, null);
     }

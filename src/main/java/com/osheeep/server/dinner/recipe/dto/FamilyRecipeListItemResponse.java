@@ -1,5 +1,6 @@
 package com.osheeep.server.dinner.recipe.dto;
 
+import com.osheeep.server.dinner.household.dto.HouseholdActorResponse;
 import java.time.Instant;
 
 public record FamilyRecipeListItemResponse(
@@ -12,10 +13,8 @@ public record FamilyRecipeListItemResponse(
         Integer servings,
         Integer estimatedMinutes,
         Long version,
-        Long creatorId,
-        String creatorName,
-        Long lastModifiedBy,
-        String lastModifiedByName,
+        HouseholdActorResponse creator,
+        HouseholdActorResponse lastModifier,
         String completedStep,
         Instant updatedAt
 ) {

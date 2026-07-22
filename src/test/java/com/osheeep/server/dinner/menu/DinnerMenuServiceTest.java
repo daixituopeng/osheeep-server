@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -19,8 +20,10 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.osheeep.server.common.error.BusinessException;
 import com.osheeep.server.common.error.ErrorCode;
 import com.osheeep.server.dinner.household.DinnerHouseholdAccessService;
+import com.osheeep.server.dinner.household.DinnerHouseholdActorLabelService;
 import com.osheeep.server.dinner.household.DinnerHouseholdAccessService.ActiveHouseholdAccess;
 import com.osheeep.server.dinner.household.DinnerHouseholdAccessService.LockedHouseholdContext;
+import com.osheeep.server.dinner.household.dto.HouseholdActorResponse;
 import com.osheeep.server.dinner.household.entity.DinnerHouseholdEntity;
 import com.osheeep.server.dinner.image.DinnerImageAssetService;
 import com.osheeep.server.dinner.image.dto.ImageAssetResponse;
@@ -45,9 +48,12 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Stream;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
@@ -72,6 +78,7 @@ class DinnerMenuServiceTest {
     @Mock private DinnerRecipeMethodMapper methodMapper;
     @Mock private DinnerImageAssetService imageAssetService;
     @Mock private DinnerRecipeCatalogAssembler catalogAssembler;
+    @Mock private DinnerHouseholdActorLabelService actorLabelService;
 
     private DinnerMenuService service;
 
@@ -85,6 +92,12 @@ class DinnerMenuServiceTest {
                         DinnerMenuActionEntity.class)
                 .forEach(entity -> TableInfoHelper.initTableInfo(assistant, entity));
         Clock clock = Clock.fixed(Instant.parse("2026-07-11T10:00:00Z"), ZoneOffset.UTC);
+        lenient().when(actorLabelService.resolve(any(), any(), any()))
+                .thenAnswer(invocation -> defaultActors(
+                        invocation.getArgument(1), invocation.getArgument(2)));
+        lenient().when(actorLabelService.ordered(any(), any()))
+                .thenAnswer(invocation -> orderedActors(
+                        invocation.getArgument(0), invocation.getArgument(1)));
         service = new DinnerMenuService(
                 householdAccessService,
                 menuMapper,
@@ -94,6 +107,7 @@ class DinnerMenuServiceTest {
                 methodMapper,
                 imageAssetService,
                 catalogAssembler,
+                actorLabelService,
                 new BusinessDateResolver(),
                 clock);
     }
@@ -344,6 +358,39 @@ class DinnerMenuServiceTest {
         assertThat(result.id()).isEqualTo(31L);
         assertThat(result.status()).isEqualTo("COMPLETED");
         assertThat(result.historyVisible()).isTrue();
+    }
+
+    @Test
+    void completedTodayMenuUsesAnonymousFormerMemberActorsWithoutForgingBoth() {
+        DinnerMenuEntity menu = menu(31L);
+        menu.setStatus("COMPLETED");
+        menu.setConfirmedBy(9L);
+        menu.setConfirmedAt(LocalDateTime.of(2026, 7, 11, 9, 30));
+        menu.setCompletedBy(10L);
+        menu.setCompletedAt(LocalDateTime.of(2026, 7, 11, 10, 0));
+        stubTodayContext(menu);
+        when(selectionMapper.selectList(any())).thenReturn(List.of(
+                systemSelection(31L, 10L, 1L),
+                systemSelection(31L, 9L, 1L)));
+        when(recipeMapper.selectByIds(List.of(1L)))
+                .thenReturn(List.of(publishedSystemRecipe(1L, "系统菜")));
+        Map<Long, HouseholdActorResponse> actors = Map.of(
+                9L, new HouseholdActorResponse("EXITED_MEMBER"),
+                10L, new HouseholdActorResponse("DELETED_MEMBER"));
+        when(actorLabelService.resolve(any(), any(), any())).thenReturn(actors);
+        when(actorLabelService.ordered(any(), any())).thenAnswer(invocation ->
+                orderedActors(invocation.getArgument(0), actors));
+
+        var result = service.today(7L);
+
+        assertThat(result.confirmedBy().kind()).isEqualTo("EXITED_MEMBER");
+        assertThat(result.completedBy().kind()).isEqualTo("DELETED_MEMBER");
+        assertThat(result.consensusCount()).isEqualTo(1);
+        assertThat(result.dishes()).singleElement().satisfies(dish -> {
+            assertThat(dish.source()).isNull();
+            assertThat(dish.selectedBy()).extracting(HouseholdActorResponse::kind)
+                    .containsExactly("EXITED_MEMBER", "DELETED_MEMBER");
+        });
     }
 
     @Test
@@ -616,7 +663,7 @@ class DinnerMenuServiceTest {
 
         assertThat(result.status()).isEqualTo("CONFIRMED");
         assertThat(result.version()).isEqualTo(6L);
-        assertThat(result.confirmedBy()).isEqualTo(7L);
+        assertThat(result.confirmedBy()).isEqualTo(new HouseholdActorResponse("ME"));
         verify(actionMapper).insert(any(DinnerMenuActionEntity.class));
     }
 
@@ -763,6 +810,39 @@ class DinnerMenuServiceTest {
         return new ActiveHouseholdAccess(
                 7L, 11L, 41L, 4L, "OWNER", historyVisibleFrom,
                 8L, "Asia/Shanghai");
+    }
+
+    private static Map<Long, HouseholdActorResponse> defaultActors(
+            Long currentUserId,
+            Iterable<Long> userIds
+    ) {
+        Map<Long, HouseholdActorResponse> result = new LinkedHashMap<>();
+        if (userIds == null) {
+            return result;
+        }
+        userIds.forEach(userId -> {
+            if (userId != null) {
+                result.put(userId, new HouseholdActorResponse(
+                        userId.equals(currentUserId) ? "ME" : "PARTNER"));
+            }
+        });
+        return result;
+    }
+
+    private static List<HouseholdActorResponse> orderedActors(
+            Iterable<Long> userIds,
+            Map<Long, HouseholdActorResponse> actors
+    ) {
+        if (userIds == null) {
+            return List.of();
+        }
+        Set<Long> unique = new LinkedHashSet<>();
+        userIds.forEach(unique::add);
+        return unique.stream().map(actors::get)
+                .sorted(Comparator.comparingInt(actor ->
+                        List.of("ME", "PARTNER", "EXITED_MEMBER", "DELETED_MEMBER")
+                                .indexOf(actor.kind())))
+                .toList();
     }
 
     private static DinnerMenuEntity menu(Long id) {

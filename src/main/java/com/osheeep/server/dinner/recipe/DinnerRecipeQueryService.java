@@ -1,6 +1,8 @@
 package com.osheeep.server.dinner.recipe;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.osheeep.server.dinner.household.DinnerHouseholdActorLabelService;
+import com.osheeep.server.dinner.household.dto.HouseholdActorResponse;
 import com.osheeep.server.dinner.image.DinnerImageAssetService;
 import com.osheeep.server.dinner.image.dto.ImageAssetResponse;
 import com.osheeep.server.dinner.recipe.DinnerRecipeAuthorizer.RecipeAccess;
@@ -18,8 +20,6 @@ import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeIngredientRow;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMethodMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMethodStepMapper;
-import com.osheeep.server.user.UserMapper;
-import com.osheeep.server.user.entity.UserEntity;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -30,7 +30,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -39,14 +38,12 @@ import org.springframework.util.StringUtils;
 public class DinnerRecipeQueryService {
 
     private static final ZoneId SHANGHAI = ZoneId.of("Asia/Shanghai");
-    private static final String MEMBER_FALLBACK = "家庭成员";
-
     private final DinnerRecipeMapper recipeMapper;
     private final DinnerRecipeIngredientMapper ingredientMapper;
     private final DinnerRecipeMethodMapper methodMapper;
     private final DinnerRecipeMethodStepMapper stepMapper;
     private final DinnerImageAssetService imageAssetService;
-    private final UserMapper userMapper;
+    private final DinnerHouseholdActorLabelService actorLabelService;
     private final DinnerRecipeAuthorizer authorizer;
 
     public DinnerRecipeQueryService(
@@ -55,7 +52,7 @@ public class DinnerRecipeQueryService {
             DinnerRecipeMethodMapper methodMapper,
             DinnerRecipeMethodStepMapper stepMapper,
             DinnerImageAssetService imageAssetService,
-            UserMapper userMapper,
+            DinnerHouseholdActorLabelService actorLabelService,
             DinnerRecipeAuthorizer authorizer
     ) {
         this.recipeMapper = recipeMapper;
@@ -63,7 +60,7 @@ public class DinnerRecipeQueryService {
         this.methodMapper = methodMapper;
         this.stepMapper = stepMapper;
         this.imageAssetService = imageAssetService;
-        this.userMapper = userMapper;
+        this.actorLabelService = actorLabelService;
         this.authorizer = authorizer;
     }
 
@@ -86,9 +83,15 @@ public class DinnerRecipeQueryService {
         }
 
         AggregateData aggregate = loadAggregate(recipes);
-        Map<Long, UserEntity> usersById = loadUsers(recipes);
+        Set<Long> actorUserIds = new LinkedHashSet<>();
+        recipes.forEach(recipe -> {
+            actorUserIds.add(recipe.getCreatorId());
+            actorUserIds.add(recipe.getLastModifiedBy());
+        });
+        Map<Long, HouseholdActorResponse> actors = actorLabelService.resolve(
+                access.householdId(), userId, actorUserIds);
         return recipes.stream()
-                .map(recipe -> listResponse(recipe, aggregate, usersById))
+                .map(recipe -> listResponse(recipe, aggregate, actors))
                 .toList();
     }
 
@@ -170,27 +173,10 @@ public class DinnerRecipeQueryService {
         return imageAssetService.findApprovedByIds(imageIds);
     }
 
-    private Map<Long, UserEntity> loadUsers(List<DinnerRecipeEntity> recipes) {
-        Set<Long> userIds = new LinkedHashSet<>();
-        recipes.forEach(recipe -> {
-            if (recipe.getCreatorId() != null) {
-                userIds.add(recipe.getCreatorId());
-            }
-            if (recipe.getLastModifiedBy() != null) {
-                userIds.add(recipe.getLastModifiedBy());
-            }
-        });
-        if (userIds.isEmpty()) {
-            return Map.of();
-        }
-        return userMapper.selectByIds(userIds).stream()
-                .collect(Collectors.toMap(UserEntity::getId, Function.identity()));
-    }
-
     private FamilyRecipeListItemResponse listResponse(
             DinnerRecipeEntity recipe,
             AggregateData aggregate,
-            Map<Long, UserEntity> usersById
+            Map<Long, HouseholdActorResponse> actors
     ) {
         List<String> incomplete = incompleteSteps(recipe, aggregate);
         ImageAssetResponse image = selectedImage(recipe, aggregate);
@@ -198,10 +184,9 @@ public class DinnerRecipeQueryService {
                 recipe.getId(), recipe.getStatus(), recipe.getName(),
                 image == null ? recipe.getImagePath() : image.listUrl(),
                 recipe.getCategory(), recipe.getFlavor(), recipe.getServings(),
-                recipe.getEstimatedMinutes(), recipe.getVersion(), recipe.getCreatorId(),
-                memberName(usersById.get(recipe.getCreatorId())),
-                recipe.getLastModifiedBy(),
-                memberName(usersById.get(recipe.getLastModifiedBy())),
+                recipe.getEstimatedMinutes(), recipe.getVersion(),
+                requireActor(recipe.getCreatorId(), actors),
+                requireActor(recipe.getLastModifiedBy(), actors),
                 incomplete.isEmpty() ? "PREVIEW" : incomplete.getFirst(),
                 toInstant(recipe.getUpdatedAt()));
     }
@@ -264,17 +249,15 @@ public class DinnerRecipeQueryService {
                         .allMatch(step -> StringUtils.hasText(step.instruction()));
     }
 
-    private String memberName(UserEntity user) {
-        if (user == null) {
-            return MEMBER_FALLBACK;
+    private HouseholdActorResponse requireActor(
+            Long userId,
+            Map<Long, HouseholdActorResponse> actors
+    ) {
+        HouseholdActorResponse actor = userId == null ? null : actors.get(userId);
+        if (actor == null) {
+            throw new IllegalStateException("Unresolved household actor");
         }
-        if (StringUtils.hasText(user.getDisplayName())) {
-            return user.getDisplayName();
-        }
-        if (StringUtils.hasText(user.getUsername())) {
-            return user.getUsername();
-        }
-        return MEMBER_FALLBACK;
+        return actor;
     }
 
     private Instant toInstant(LocalDateTime dateTime) {

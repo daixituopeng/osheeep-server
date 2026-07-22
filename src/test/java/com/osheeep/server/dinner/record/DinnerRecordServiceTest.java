@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -18,8 +19,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.osheeep.server.common.error.BusinessException;
 import com.osheeep.server.common.error.ErrorCode;
 import com.osheeep.server.dinner.household.DinnerHouseholdAccessService;
+import com.osheeep.server.dinner.household.DinnerHouseholdActorLabelService;
 import com.osheeep.server.dinner.household.DinnerHouseholdAccessService.ActiveHouseholdAccess;
 import com.osheeep.server.dinner.household.DinnerHouseholdAccessService.LockedHouseholdContext;
+import com.osheeep.server.dinner.household.dto.HouseholdActorResponse;
 import com.osheeep.server.dinner.menu.BusinessDateResolver;
 import com.osheeep.server.dinner.menu.DinnerMenuService;
 import com.osheeep.server.dinner.menu.dto.TodayMenuResponse;
@@ -44,6 +47,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.stream.IntStream;
@@ -73,6 +77,7 @@ class DinnerRecordServiceTest {
     @Mock private DinnerRecordDishSnapshotMapper snapshotMapper;
     @Mock private DinnerMenuService menuService;
     @Mock private DinnerRecordSnapshotAssembler snapshotAssembler;
+    @Mock private DinnerHouseholdActorLabelService actorLabelService;
 
     private DinnerRecordService service;
 
@@ -82,10 +87,17 @@ class DinnerRecordServiceTest {
                 new MapperBuilderAssistant(new MybatisConfiguration(), "test"),
                 DinnerCookingRecordEntity.class);
         Clock clock = Clock.fixed(Instant.parse("2026-07-11T11:00:00Z"), ZoneOffset.UTC);
+        lenient().when(actorLabelService.resolve(any(), any(), any()))
+                .thenAnswer(invocation -> defaultActors(
+                        invocation.getArgument(1), invocation.getArgument(2)));
+        lenient().when(actorLabelService.ordered(any(), any()))
+                .thenAnswer(invocation -> orderedActors(
+                        invocation.getArgument(0), invocation.getArgument(1)));
         service = new DinnerRecordService(
                 householdAccessService, menuMapper, selectionMapper, actionMapper,
                 recordMapper, snapshotMapper, menuService, snapshotAssembler,
                 new DinnerRecordSnapshotJsonCodec(new ObjectMapper()),
+                actorLabelService,
                 new BusinessDateResolver(), clock);
     }
 
@@ -457,7 +469,7 @@ class DinnerRecordServiceTest {
     }
 
     @Test
-    void listStartsAtCurrentMembershipHistoryVisibilityWindow() {
+    void replacementOrRejoinedMemberListStartsAtCurrentMembershipVisibilityWindow() {
         LocalDateTime visibleFrom = LocalDateTime.of(2026, 7, 11, 10, 30);
         DinnerCookingRecordEntity hidden = record(90L, 30L);
         hidden.setHouseholdId(11L);
@@ -483,6 +495,27 @@ class DinnerRecordServiceTest {
         var result = service.list(7L);
 
         assertThat(result).extracting(item -> item.id()).containsExactly(91L);
+    }
+
+    @Test
+    void continuousMemberStillSeesRecordsFromBeforeThePartnerWasReplaced() {
+        LocalDateTime completedAt = LocalDateTime.of(2026, 7, 1, 10, 30);
+        DinnerCookingRecordEntity oldRecord = record(90L, 30L);
+        oldRecord.setCompletedAt(completedAt);
+        oldRecord.setCompletedBy(9L);
+        when(householdAccessService.requireActiveHousehold(7L))
+                .thenReturn(access(LocalDateTime.of(1970, 1, 1, 0, 0)));
+        when(recordMapper.selectList(any())).thenReturn(List.of(oldRecord));
+        when(snapshotMapper.selectCount(any())).thenReturn(1L);
+        when(actorLabelService.resolve(any(), any(), any())).thenReturn(Map.of(
+                9L, new HouseholdActorResponse("EXITED_MEMBER")));
+
+        var result = service.list(7L);
+
+        assertThat(result).singleElement().satisfies(item -> {
+            assertThat(item.id()).isEqualTo(90L);
+            assertThat(item.completedBy().kind()).isEqualTo("EXITED_MEMBER");
+        });
     }
 
     @Test
@@ -565,6 +598,53 @@ class DinnerRecordServiceTest {
                     .isInstanceOf(UnsupportedOperationException.class);
         });
         verifyNoInteractions(recipeMapper);
+    }
+
+    @Test
+    void recordActorsCoverCurrentExitedAndDeletedSelectorsInStableRelationOrder() {
+        when(householdAccessService.requireActiveHousehold(7L)).thenReturn(access());
+        DinnerCookingRecordEntity record = record(91L, 31L);
+        record.setCompletedBy(10L);
+        when(recordMapper.selectById(91L)).thenReturn(record);
+        List<DinnerRecordDishSnapshotEntity> snapshots = List.of(
+                legacySnapshot(1L, "[7,8]", 0),
+                legacySnapshot(2L, "[7,9]", 1),
+                legacySnapshot(3L, "[9]", 2),
+                legacySnapshot(4L, "[10,9]", 3));
+        when(snapshotMapper.selectList(any())).thenReturn(snapshots);
+        Map<Long, HouseholdActorResponse> actors = Map.of(
+                7L, new HouseholdActorResponse("ME"),
+                8L, new HouseholdActorResponse("PARTNER"),
+                9L, new HouseholdActorResponse("EXITED_MEMBER"),
+                10L, new HouseholdActorResponse("DELETED_MEMBER"));
+        when(actorLabelService.resolve(any(), any(), any())).thenReturn(actors);
+        when(actorLabelService.ordered(any(), any())).thenAnswer(invocation ->
+                orderedActors(invocation.getArgument(0), actors));
+
+        var result = service.detail(7L, 91L);
+
+        assertThat(result.completedBy().kind()).isEqualTo("DELETED_MEMBER");
+        assertThat(result.dishes()).satisfiesExactly(
+                both -> {
+                    assertThat(both.selectedBy()).extracting(HouseholdActorResponse::kind)
+                            .containsExactly("ME", "PARTNER");
+                    assertThat(both.source()).isEqualTo("BOTH");
+                },
+                mixed -> {
+                    assertThat(mixed.selectedBy()).extracting(HouseholdActorResponse::kind)
+                            .containsExactly("ME", "EXITED_MEMBER");
+                    assertThat(mixed.source()).isNull();
+                },
+                exited -> {
+                    assertThat(exited.selectedBy()).extracting(HouseholdActorResponse::kind)
+                            .containsExactly("EXITED_MEMBER");
+                    assertThat(exited.source()).isNull();
+                },
+                formerPair -> {
+                    assertThat(formerPair.selectedBy()).extracting(HouseholdActorResponse::kind)
+                            .containsExactly("EXITED_MEMBER", "DELETED_MEMBER");
+                    assertThat(formerPair.source()).isNull();
+                });
     }
 
     @Test
@@ -873,6 +953,22 @@ class DinnerRecordServiceTest {
         return snapshot;
     }
 
+    private DinnerRecordDishSnapshotEntity legacySnapshot(
+            Long recipeId,
+            String selectedByUserIds,
+            int sortOrder
+    ) {
+        DinnerRecordDishSnapshotEntity snapshot = new DinnerRecordDishSnapshotEntity();
+        snapshot.setRecipeId(recipeId);
+        snapshot.setName("系统菜" + recipeId);
+        snapshot.setCategory("家常菜");
+        snapshot.setFlavor("鲜香");
+        snapshot.setEstimatedMinutes(10);
+        snapshot.setSelectedByUserIds(selectedByUserIds);
+        snapshot.setSortOrder(sortOrder);
+        return snapshot;
+    }
+
     private DinnerRecordDishSnapshotEntity systemSnapshot() {
         DinnerRecordDishSnapshotEntity snapshot = snapshot();
         snapshot.setRecipeScope("SYSTEM");
@@ -896,8 +992,44 @@ class DinnerRecordServiceTest {
         return new TodayMenuResponse(
                 31L, LocalDate.of(2026, 7, 11), "COMPLETED", 6L,
                 2, 1, 1, List.of(1L, 2L), List.of(),
-                7L, Instant.parse("2026-07-11T10:00:00Z"),
-                7L, Instant.parse("2026-07-11T11:00:00Z"), recordId);
+                new HouseholdActorResponse("ME"),
+                Instant.parse("2026-07-11T10:00:00Z"),
+                new HouseholdActorResponse("ME"),
+                Instant.parse("2026-07-11T11:00:00Z"), recordId);
+    }
+
+    private static Map<Long, HouseholdActorResponse> defaultActors(
+            Long currentUserId,
+            Iterable<Long> userIds
+    ) {
+        java.util.LinkedHashMap<Long, HouseholdActorResponse> result =
+                new java.util.LinkedHashMap<>();
+        if (userIds == null) {
+            return result;
+        }
+        userIds.forEach(userId -> {
+            if (userId != null) {
+                result.put(userId, new HouseholdActorResponse(
+                        userId.equals(currentUserId) ? "ME" : "PARTNER"));
+            }
+        });
+        return result;
+    }
+
+    private static List<HouseholdActorResponse> orderedActors(
+            Iterable<Long> userIds,
+            Map<Long, HouseholdActorResponse> actors
+    ) {
+        if (userIds == null) {
+            return List.of();
+        }
+        java.util.LinkedHashSet<Long> unique = new java.util.LinkedHashSet<>();
+        userIds.forEach(unique::add);
+        return unique.stream().map(actors::get)
+                .sorted(java.util.Comparator.comparingInt(actor ->
+                        List.of("ME", "PARTNER", "EXITED_MEMBER", "DELETED_MEMBER")
+                                .indexOf(actor.kind())))
+                .toList();
     }
 
     private record SnapshotCase(

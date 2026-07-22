@@ -1,6 +1,7 @@
 package com.osheeep.server.dinner.menu.dto;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.osheeep.server.dinner.household.dto.HouseholdActorResponse;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
@@ -16,9 +17,9 @@ public record TodayMenuResponse(
         Integer consensusCount,
         List<Long> selectedRecipeIds,
         List<MenuDishResponse> dishes,
-        Long confirmedBy,
+        HouseholdActorResponse confirmedBy,
         Instant confirmedAt,
-        Long completedBy,
+        HouseholdActorResponse completedBy,
         Instant completedAt,
         Long recordId,
         Boolean historyVisible
@@ -33,9 +34,9 @@ public record TodayMenuResponse(
             int consensusCount,
             List<Long> selectedRecipeIds,
             List<MenuDishResponse> dishes,
-            Long confirmedBy,
+            HouseholdActorResponse confirmedBy,
             Instant confirmedAt,
-            Long completedBy,
+            HouseholdActorResponse completedBy,
             Instant completedAt,
             Long recordId
     ) {

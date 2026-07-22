@@ -17,6 +17,8 @@ import com.osheeep.server.common.error.BusinessException;
 import com.osheeep.server.common.error.ErrorCode;
 import com.osheeep.server.dinner.household.entity.DinnerHouseholdEntity;
 import com.osheeep.server.dinner.household.entity.DinnerHouseholdMemberEntity;
+import com.osheeep.server.dinner.household.DinnerHouseholdActorLabelService;
+import com.osheeep.server.dinner.household.dto.HouseholdActorResponse;
 import com.osheeep.server.dinner.household.mapper.DinnerHouseholdMapper;
 import com.osheeep.server.dinner.household.mapper.DinnerHouseholdMemberMapper;
 import com.osheeep.server.dinner.image.DinnerImageAssetService;
@@ -33,8 +35,6 @@ import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeIngredientRow;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMethodMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMethodStepMapper;
-import com.osheeep.server.user.UserMapper;
-import com.osheeep.server.user.entity.UserEntity;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -63,7 +63,7 @@ class DinnerRecipeQueryServiceTest {
     @Mock private DinnerRecipeMethodMapper methodMapper;
     @Mock private DinnerRecipeMethodStepMapper stepMapper;
     @Mock private DinnerImageAssetService imageAssetService;
-    @Mock private UserMapper userMapper;
+    @Mock private DinnerHouseholdActorLabelService actorLabelService;
     @Mock private DinnerHouseholdMemberMapper memberMapper;
     @Mock private DinnerHouseholdMapper householdMapper;
 
@@ -84,9 +84,12 @@ class DinnerRecipeQueryServiceTest {
     void setUp() {
         DinnerRecipeAuthorizer authorizer =
                 new DinnerRecipeAuthorizer(memberMapper, householdMapper, recipeMapper);
+        lenient().when(actorLabelService.resolve(any(), any(), any()))
+                .thenAnswer(invocation -> defaultActors(
+                        invocation.getArgument(1), invocation.getArgument(2)));
         queryService = new DinnerRecipeQueryService(
                 recipeMapper, ingredientMapper, methodMapper, stepMapper, imageAssetService,
-                userMapper, authorizer);
+                actorLabelService, authorizer);
     }
 
     @Test
@@ -97,16 +100,13 @@ class DinnerRecipeQueryServiceTest {
         when(recipeMapper.selectList(any())).thenReturn(List.of(draft));
         when(ingredientMapper.selectWithIngredientNames(List.of(101L))).thenReturn(List.of());
         when(methodMapper.selectList(any())).thenReturn(List.of());
-        when(userMapper.selectByIds(any()))
-                .thenReturn(List.of(user(7L, "", "owner"), user(8L, "伙伴", "partner")));
-
         List<FamilyRecipeListItemResponse> result =
                 queryService.list(7L, FamilyRecipeTab.DRAFT);
 
         assertThat(result).singleElement().satisfies(item -> {
             assertThat(item.id()).isEqualTo(101L);
-            assertThat(item.creatorName()).isEqualTo("owner");
-            assertThat(item.lastModifiedByName()).isEqualTo("伙伴");
+            assertThat(item.creator().kind()).isEqualTo("ME");
+            assertThat(item.lastModifier().kind()).isEqualTo("PARTNER");
             assertThat(item.completedStep()).isEqualTo("BASIC");
             assertThat(item.updatedAt()).isEqualTo(Instant.parse("2026-07-16T12:30:00Z"));
         });
@@ -136,7 +136,8 @@ class DinnerRecipeQueryServiceTest {
                 .doesNotContain("creator_id")
                 .contains("ORDER BY updated_at DESC,id DESC");
         verifyNoInteractions(
-                ingredientMapper, methodMapper, stepMapper, imageAssetService, userMapper);
+                ingredientMapper, methodMapper, stepMapper, imageAssetService,
+                actorLabelService);
     }
 
     @Test
@@ -164,8 +165,6 @@ class DinnerRecipeQueryServiceTest {
                 step(205L, "炒熟", 1)));
         when(imageAssetService.findApprovedByIds(List.of(9L)))
                 .thenReturn(Map.of(9L, imageResponse(9L)));
-        when(userMapper.selectByIds(any()))
-                .thenReturn(List.of(user(7L, null, null)));
 
         assertThat(queryService.list(7L, FamilyRecipeTab.DRAFT))
                 .extracting(FamilyRecipeListItemResponse::completedStep)
@@ -175,7 +174,7 @@ class DinnerRecipeQueryServiceTest {
         verify(methodMapper).selectList(any());
         verify(stepMapper).selectList(any());
         verify(imageAssetService).findApprovedByIds(List.of(9L));
-        verify(userMapper).selectByIds(any());
+        verify(actorLabelService).resolve(any(), any(), any());
     }
 
     @Test
@@ -189,7 +188,6 @@ class DinnerRecipeQueryServiceTest {
         when(methodMapper.selectList(any())).thenReturn(List.of(method(201L, 101L)));
         when(stepMapper.selectList(any())).thenReturn(List.of(step(201L, "炒熟", 0)));
         when(imageAssetService.findApprovedByIds(List.of(8L))).thenReturn(Map.of());
-        when(userMapper.selectByIds(any())).thenReturn(List.of(user(7L, "小羊", "owner")));
 
         List<FamilyRecipeListItemResponse> result =
                 queryService.list(7L, FamilyRecipeTab.DRAFT);
@@ -202,7 +200,7 @@ class DinnerRecipeQueryServiceTest {
     }
 
     @Test
-    void missingUsersUseTheHouseholdMemberFallbackWithoutPerRowQueries() {
+    void familyRecipesUseAnonymousRelationsWithoutNamesOrIds() {
         stubActiveMembership(7L, 70L);
         DinnerRecipeEntity first = draft(101L, 7L);
         first.setLastModifiedBy(8L);
@@ -211,18 +209,19 @@ class DinnerRecipeQueryServiceTest {
         when(recipeMapper.selectList(any())).thenReturn(List.of(first, second));
         when(ingredientMapper.selectWithIngredientNames(any())).thenReturn(List.of());
         when(methodMapper.selectList(any())).thenReturn(List.of());
-        when(userMapper.selectByIds(any()))
-                .thenReturn(List.of(user(7L, "", "owner"), user(8L, "伙伴", "partner")));
+        when(actorLabelService.resolve(any(), any(), any())).thenReturn(Map.of(
+                7L, new HouseholdActorResponse("ME"),
+                8L, new HouseholdActorResponse("PARTNER"),
+                9L, new HouseholdActorResponse("EXITED_MEMBER")));
 
         List<FamilyRecipeListItemResponse> result =
                 queryService.list(7L, FamilyRecipeTab.DRAFT);
 
-        assertThat(result).extracting(FamilyRecipeListItemResponse::creatorName)
-                .containsExactly("owner", "家庭成员");
-        assertThat(result).extracting(FamilyRecipeListItemResponse::lastModifiedByName)
-                .containsExactly("伙伴", "家庭成员");
-        verify(userMapper).selectByIds(any());
-        verify(userMapper, never()).selectById(any());
+        assertThat(result).extracting(item -> item.creator().kind())
+                .containsExactly("ME", "EXITED_MEMBER");
+        assertThat(result).extracting(item -> item.lastModifier().kind())
+                .containsExactly("PARTNER", "EXITED_MEMBER");
+        verify(actorLabelService).resolve(any(), any(), any());
     }
 
     @Test
@@ -291,7 +290,8 @@ class DinnerRecipeQueryServiceTest {
                                 .isEqualTo("DINNER_HOUSEHOLD_REQUIRED"));
 
         verifyNoInteractions(
-                ingredientMapper, methodMapper, stepMapper, imageAssetService, userMapper);
+                ingredientMapper, methodMapper, stepMapper, imageAssetService,
+                actorLabelService);
     }
 
     @ParameterizedTest(name = "{0} member cannot read family recipe detail from the old household")
@@ -325,7 +325,7 @@ class DinnerRecipeQueryServiceTest {
 
         verifyNoInteractions(
                 recipeMapper, ingredientMapper, methodMapper, stepMapper,
-                imageAssetService, userMapper);
+                imageAssetService, actorLabelService);
     }
 
     @ParameterizedTest(name = "ACTIVE member cannot read recipe detail when household is {0}")
@@ -499,12 +499,21 @@ class DinnerRecipeQueryServiceTest {
                 LocalDate.of(2026, 7, 16), 1198, 1091);
     }
 
-    private UserEntity user(Long id, String displayName, String username) {
-        UserEntity user = new UserEntity();
-        user.setId(id);
-        user.setDisplayName(displayName);
-        user.setUsername(username);
-        return user;
+    private static Map<Long, HouseholdActorResponse> defaultActors(
+            Long currentUserId,
+            Iterable<Long> userIds
+    ) {
+        Map<Long, HouseholdActorResponse> result = new java.util.LinkedHashMap<>();
+        if (userIds == null) {
+            return result;
+        }
+        userIds.forEach(userId -> {
+            if (userId != null) {
+                result.put(userId, new HouseholdActorResponse(
+                        userId.equals(currentUserId) ? "ME" : "PARTNER"));
+            }
+        });
+        return result;
     }
 
     private DinnerHouseholdMemberEntity member(Long userId, Long householdId) {

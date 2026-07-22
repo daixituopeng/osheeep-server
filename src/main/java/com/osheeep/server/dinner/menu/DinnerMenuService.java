@@ -4,8 +4,10 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.osheeep.server.common.error.BusinessException;
 import com.osheeep.server.common.error.ErrorCode;
 import com.osheeep.server.dinner.household.DinnerHouseholdAccessService;
+import com.osheeep.server.dinner.household.DinnerHouseholdActorLabelService;
 import com.osheeep.server.dinner.household.DinnerHouseholdAccessService.ActiveHouseholdAccess;
 import com.osheeep.server.dinner.household.DinnerHouseholdAccessService.LockedHouseholdContext;
+import com.osheeep.server.dinner.household.dto.HouseholdActorResponse;
 import com.osheeep.server.dinner.image.DinnerImageAssetService;
 import com.osheeep.server.dinner.image.dto.ImageAssetResponse;
 import com.osheeep.server.dinner.menu.dto.MenuDishResponse;
@@ -54,6 +56,7 @@ public class DinnerMenuService {
     private final DinnerRecipeMethodMapper methodMapper;
     private final DinnerImageAssetService imageAssetService;
     private final DinnerRecipeCatalogAssembler catalogAssembler;
+    private final DinnerHouseholdActorLabelService actorLabelService;
     private final BusinessDateResolver businessDateResolver;
     private final Clock clock;
 
@@ -67,11 +70,12 @@ public class DinnerMenuService {
             DinnerRecipeMethodMapper methodMapper,
             DinnerImageAssetService imageAssetService,
             DinnerRecipeCatalogAssembler catalogAssembler,
+            DinnerHouseholdActorLabelService actorLabelService,
             BusinessDateResolver businessDateResolver
     ) {
         this(householdAccessService, menuMapper, selectionMapper, actionMapper,
                 recipeMapper, methodMapper, imageAssetService, catalogAssembler,
-                businessDateResolver, Clock.systemUTC());
+                actorLabelService, businessDateResolver, Clock.systemUTC());
     }
 
     DinnerMenuService(
@@ -83,6 +87,7 @@ public class DinnerMenuService {
             DinnerRecipeMethodMapper methodMapper,
             DinnerImageAssetService imageAssetService,
             DinnerRecipeCatalogAssembler catalogAssembler,
+            DinnerHouseholdActorLabelService actorLabelService,
             BusinessDateResolver businessDateResolver,
             Clock clock
     ) {
@@ -94,6 +99,7 @@ public class DinnerMenuService {
         this.methodMapper = methodMapper;
         this.imageAssetService = imageAssetService;
         this.catalogAssembler = catalogAssembler;
+        this.actorLabelService = actorLabelService;
         this.businessDateResolver = businessDateResolver;
         this.clock = clock;
     }
@@ -306,20 +312,24 @@ public class DinnerMenuService {
             throw invalidRecipe();
         }
 
+        Set<Long> actorUserIds = new LinkedHashSet<>();
+        selectorsByRecipe.values().forEach(actorUserIds::addAll);
+        actorUserIds.add(menu.getConfirmedBy());
+        actorUserIds.add(menu.getCompletedBy());
+        Map<Long, HouseholdActorResponse> actors = actorLabelService.resolve(
+                menu.getHouseholdId(), currentUserId, actorUserIds);
+
         List<MenuDishResponse> dishes = new ArrayList<>();
         int consensusCount = 0;
         for (Long recipeId : recipeIds) {
             DinnerRecipeEntity recipe = recipesById.get(recipeId);
             SelectionIdentity identity = identitiesByRecipe.get(recipeId);
             Set<Long> selectors = selectorsByRecipe.get(recipeId);
-            String source;
+            List<HouseholdActorResponse> selectedBy =
+                    actorLabelService.ordered(selectors, actors);
+            String source = source(selectedBy);
             if (selectors.size() > 1) {
-                source = "BOTH";
                 consensusCount++;
-            } else if (selectors.contains(currentUserId)) {
-                source = "ME";
-            } else {
-                source = "PARTNER";
             }
             RecipeMethodSummaryResponse method = null;
             String imagePath = recipe.getImagePath();
@@ -342,8 +352,8 @@ public class DinnerMenuService {
             }
             dishes.add(new MenuDishResponse(
                     recipe.getId(), recipe.getName(), imagePath, recipe.getCategory(),
-                    recipe.getFlavor(), recipe.getEstimatedMinutes(), source, recipe.getScope(),
-                    identity.recipeVersion(), method));
+                    recipe.getFlavor(), recipe.getEstimatedMinutes(), source, selectedBy,
+                    recipe.getScope(), identity.recipeVersion(), method));
         }
 
         List<Long> selectedRecipeIds = selections.stream()
@@ -361,8 +371,37 @@ public class DinnerMenuService {
         return new TodayMenuResponse(
                 menu.getId(), menu.getMenuDate(), menu.getStatus(), menu.getVersion(),
                 selectedRecipeIds.size(), partnerSelectionCount, consensusCount,
-                selectedRecipeIds, dishes, menu.getConfirmedBy(), instant(menu.getConfirmedAt()),
-                menu.getCompletedBy(), instant(menu.getCompletedAt()), null, true);
+                selectedRecipeIds, dishes, nullableActor(menu.getConfirmedBy(), actors),
+                instant(menu.getConfirmedAt()), nullableActor(menu.getCompletedBy(), actors),
+                instant(menu.getCompletedAt()), null, true);
+    }
+
+    private String source(List<HouseholdActorResponse> selectedBy) {
+        Set<String> kinds = selectedBy.stream()
+                .map(HouseholdActorResponse::kind)
+                .collect(java.util.stream.Collectors.toSet());
+        if (selectedBy.size() == 2 && kinds.equals(Set.of("ME", "PARTNER"))) {
+            return "BOTH";
+        }
+        if (selectedBy.size() == 1
+                && Set.of("ME", "PARTNER").contains(selectedBy.getFirst().kind())) {
+            return selectedBy.getFirst().kind();
+        }
+        return null;
+    }
+
+    private HouseholdActorResponse nullableActor(
+            Long userId,
+            Map<Long, HouseholdActorResponse> actors
+    ) {
+        if (userId == null) {
+            return null;
+        }
+        HouseholdActorResponse actor = actors.get(userId);
+        if (actor == null) {
+            throw new IllegalStateException("Unresolved household actor");
+        }
+        return actor;
     }
 
     private Instant instant(LocalDateTime value) {

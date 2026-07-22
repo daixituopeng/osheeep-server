@@ -4,8 +4,10 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.osheeep.server.common.error.BusinessException;
 import com.osheeep.server.common.error.ErrorCode;
 import com.osheeep.server.dinner.household.DinnerHouseholdAccessService;
+import com.osheeep.server.dinner.household.DinnerHouseholdActorLabelService;
 import com.osheeep.server.dinner.household.DinnerHouseholdAccessService.ActiveHouseholdAccess;
 import com.osheeep.server.dinner.household.DinnerHouseholdAccessService.LockedHouseholdContext;
+import com.osheeep.server.dinner.household.dto.HouseholdActorResponse;
 import com.osheeep.server.dinner.menu.BusinessDateResolver;
 import com.osheeep.server.dinner.menu.DinnerMenuService;
 import com.osheeep.server.dinner.menu.entity.DinnerMenuActionEntity;
@@ -31,7 +33,9 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -58,6 +62,7 @@ public class DinnerRecordService {
     private final DinnerMenuService menuService;
     private final DinnerRecordSnapshotAssembler snapshotAssembler;
     private final DinnerRecordSnapshotJsonCodec snapshotJsonCodec;
+    private final DinnerHouseholdActorLabelService actorLabelService;
     private final BusinessDateResolver businessDateResolver;
     private final Clock clock;
 
@@ -72,11 +77,13 @@ public class DinnerRecordService {
             DinnerMenuService menuService,
             DinnerRecordSnapshotAssembler snapshotAssembler,
             DinnerRecordSnapshotJsonCodec snapshotJsonCodec,
+            DinnerHouseholdActorLabelService actorLabelService,
             BusinessDateResolver businessDateResolver
     ) {
         this(householdAccessService, menuMapper, selectionMapper, actionMapper,
                 recordMapper, snapshotMapper, menuService, snapshotAssembler,
-                snapshotJsonCodec, businessDateResolver, Clock.systemUTC());
+                snapshotJsonCodec, actorLabelService, businessDateResolver,
+                Clock.systemUTC());
     }
 
     DinnerRecordService(
@@ -89,6 +96,7 @@ public class DinnerRecordService {
             DinnerMenuService menuService,
             DinnerRecordSnapshotAssembler snapshotAssembler,
             DinnerRecordSnapshotJsonCodec snapshotJsonCodec,
+            DinnerHouseholdActorLabelService actorLabelService,
             BusinessDateResolver businessDateResolver,
             Clock clock
     ) {
@@ -101,6 +109,7 @@ public class DinnerRecordService {
         this.menuService = menuService;
         this.snapshotAssembler = snapshotAssembler;
         this.snapshotJsonCodec = snapshotJsonCodec;
+        this.actorLabelService = actorLabelService;
         this.businessDateResolver = businessDateResolver;
         this.clock = clock;
     }
@@ -206,15 +215,21 @@ public class DinnerRecordService {
 
     public List<RecordSummaryResponse> list(Long userId) {
         ActiveHouseholdAccess access = householdAccessService.requireActiveHousehold(userId);
-        return recordMapper.selectList(Wrappers.<DinnerCookingRecordEntity>lambdaQuery()
+        List<DinnerCookingRecordEntity> records = recordMapper.selectList(
+                Wrappers.<DinnerCookingRecordEntity>lambdaQuery()
                         .eq(DinnerCookingRecordEntity::getHouseholdId, access.householdId())
                         .ge(DinnerCookingRecordEntity::getCompletedAt,
                                 access.historyVisibleFrom())
                         .orderByDesc(DinnerCookingRecordEntity::getCompletedAt)
-                        .orderByDesc(DinnerCookingRecordEntity::getId))
+                        .orderByDesc(DinnerCookingRecordEntity::getId));
+        Map<Long, HouseholdActorResponse> actors = actorLabelService.resolve(
+                access.householdId(), userId,
+                records.stream().map(DinnerCookingRecordEntity::getCompletedBy).toList());
+        return records
                 .stream()
                 .map(record -> new RecordSummaryResponse(
-                        record.getId(), record.getRecordDate(), record.getCompletedBy(),
+                        record.getId(), record.getRecordDate(),
+                        requireActor(record.getCompletedBy(), actors),
                         instant(record.getCompletedAt()),
                         Math.toIntExact(snapshotMapper.selectCount(
                                 Wrappers.<DinnerRecordDishSnapshotEntity>lambdaQuery()
@@ -226,15 +241,22 @@ public class DinnerRecordService {
         ActiveHouseholdAccess access = householdAccessService.requireActiveHousehold(userId);
         DinnerCookingRecordEntity record = recordMapper.selectById(recordId);
         requireVisibleRecord(access, record);
-        List<RecordDishResponse> dishes = snapshotMapper.selectList(
-                        Wrappers.<DinnerRecordDishSnapshotEntity>lambdaQuery()
-                                .eq(DinnerRecordDishSnapshotEntity::getRecordId, recordId)
-                                .orderByAsc(DinnerRecordDishSnapshotEntity::getSortOrder))
-                .stream()
-                .map(snapshot -> recordDish(snapshot, userId))
+        List<DinnerRecordDishSnapshotEntity> snapshots = snapshotMapper.selectList(
+                Wrappers.<DinnerRecordDishSnapshotEntity>lambdaQuery()
+                        .eq(DinnerRecordDishSnapshotEntity::getRecordId, recordId)
+                        .orderByAsc(DinnerRecordDishSnapshotEntity::getSortOrder));
+        Set<Long> actorUserIds = new LinkedHashSet<>();
+        actorUserIds.add(record.getCompletedBy());
+        snapshots.forEach(snapshot ->
+                actorUserIds.addAll(selectedUserIds(snapshot.getSelectedByUserIds())));
+        Map<Long, HouseholdActorResponse> actors = actorLabelService.resolve(
+                access.householdId(), userId, actorUserIds);
+        List<RecordDishResponse> dishes = snapshots.stream()
+                .map(snapshot -> recordDish(snapshot, actors))
                 .toList();
         return new RecordDetailResponse(
-                record.getId(), record.getRecordDate(), record.getCompletedBy(),
+                record.getId(), record.getRecordDate(),
+                requireActor(record.getCompletedBy(), actors),
                 instant(record.getCompletedAt()), dishes);
     }
 
@@ -288,23 +310,48 @@ public class DinnerRecordService {
                 toJsonArray(draft.selectedByUserIds()));
     }
 
-    private String source(String selectedByUserIds, Long currentUserId) {
+    private Set<Long> selectedUserIds(String selectedByUserIds) {
+        if (!StringUtils.hasText(selectedByUserIds)
+                || selectedByUserIds.length() < 2
+                || selectedByUserIds.charAt(0) != '['
+                || selectedByUserIds.charAt(selectedByUserIds.length() - 1) != ']') {
+            throw incompleteSnapshot();
+        }
         String content = selectedByUserIds.substring(1, selectedByUserIds.length() - 1).trim();
-        Set<Long> selectors = content.isEmpty()
-                ? Set.of()
-                : Arrays.stream(content.split(","))
-                        .map(String::trim)
-                        .map(Long::valueOf)
-                        .collect(Collectors.toSet());
-        if (selectors.size() > 1) {
+        try {
+            Set<Long> selectors = content.isEmpty()
+                    ? Set.of()
+                    : Arrays.stream(content.split(","))
+                            .map(String::trim)
+                            .map(Long::valueOf)
+                            .collect(Collectors.toCollection(LinkedHashSet::new));
+            if (selectors.isEmpty()
+                    || selectors.size() > 2
+                    || selectors.stream().anyMatch(id -> id == null || id <= 0)) {
+                throw incompleteSnapshot();
+            }
+            return Set.copyOf(selectors);
+        } catch (NumberFormatException exception) {
+            throw incompleteSnapshot();
+        }
+    }
+
+    private String source(List<HouseholdActorResponse> selectedBy) {
+        if (selectedBy.size() == 2
+                && selectedBy.stream().map(HouseholdActorResponse::kind).collect(Collectors.toSet())
+                        .equals(Set.of("ME", "PARTNER"))) {
             return "BOTH";
         }
-        return selectors.contains(currentUserId) ? "ME" : "PARTNER";
+        if (selectedBy.size() == 1
+                && Set.of("ME", "PARTNER").contains(selectedBy.getFirst().kind())) {
+            return selectedBy.getFirst().kind();
+        }
+        return null;
     }
 
     private RecordDishResponse recordDish(
             DinnerRecordDishSnapshotEntity snapshot,
-            Long currentUserId
+            Map<Long, HouseholdActorResponse> actors
     ) {
         List<RecordMethodStepSnapshotResponse> steps =
                 snapshotJsonCodec.readSteps(snapshot.getMethodStepsJson());
@@ -338,11 +385,12 @@ public class DinnerRecordService {
         } else {
             throw incompleteSnapshot();
         }
+        List<HouseholdActorResponse> selectedBy = actorLabelService.ordered(
+                selectedUserIds(snapshot.getSelectedByUserIds()), actors);
         return new RecordDishResponse(
                 snapshot.getRecipeId(), snapshot.getName(), snapshot.getImagePath(),
                 snapshot.getCategory(), snapshot.getFlavor(), snapshot.getEstimatedMinutes(),
-                source(snapshot.getSelectedByUserIds(), currentUserId), scope, recipeVersion,
-                servings, method, ingredients);
+                source(selectedBy), selectedBy, scope, recipeVersion, servings, method, ingredients);
     }
 
     private boolean isLegacySnapshot(DinnerRecordDishSnapshotEntity snapshot) {
@@ -406,6 +454,17 @@ public class DinnerRecordService {
 
     private IllegalStateException incompleteSnapshot() {
         return new IllegalStateException(INCOMPLETE_SNAPSHOT);
+    }
+
+    private HouseholdActorResponse requireActor(
+            Long userId,
+            Map<Long, HouseholdActorResponse> actors
+    ) {
+        HouseholdActorResponse actor = userId == null ? null : actors.get(userId);
+        if (actor == null) {
+            throw new IllegalStateException("Unresolved household actor");
+        }
+        return actor;
     }
 
     private Instant instant(LocalDateTime value) {
