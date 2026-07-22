@@ -3,6 +3,7 @@ package com.osheeep.server.dinner.household;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.osheeep.server.dinner.household.mapper.DinnerHouseholdMapper;
 import com.osheeep.server.dinner.household.mapper.DinnerHouseholdMemberMapper;
 import com.osheeep.server.dinner.household.mapper.DinnerHouseholdOperationMapper;
 import com.osheeep.server.dinner.ingredient.mapper.DinnerHouseholdInventoryMapper;
@@ -21,6 +22,7 @@ class DinnerMembershipTerminationMapperContractTest {
         MybatisConfiguration configuration = new MybatisConfiguration();
         List.of(
                         DinnerHouseholdOperationMapper.class,
+                        DinnerHouseholdMapper.class,
                         DinnerHouseholdMemberMapper.class,
                         DinnerMenuMapper.class,
                         DinnerMenuSelectionMapper.class,
@@ -34,8 +36,14 @@ class DinnerMembershipTerminationMapperContractTest {
                 "selectByActorAndIdempotencyKeyForUpdate");
         assertStatement(configuration, DinnerHouseholdOperationMapper.class,
                 "deleteExpiredByActorAndIdempotencyKey");
+        assertStatement(configuration, DinnerHouseholdMapper.class,
+                "advanceOwnership");
         assertStatement(configuration, DinnerHouseholdMemberMapper.class,
                 "endActiveMember");
+        assertStatement(configuration, DinnerHouseholdMemberMapper.class,
+                "demoteActiveOwner");
+        assertStatement(configuration, DinnerHouseholdMemberMapper.class,
+                "promoteActiveMember");
         assertStatement(configuration, DinnerMenuMapper.class,
                 "selectUncompletedByHouseholdIdForUpdate");
         assertStatement(configuration, DinnerMenuMapper.class,

@@ -25,6 +25,7 @@ public class DinnerHouseholdOperationService {
 
     static final String MEMBER_LEAVE = "MEMBER_LEAVE";
     static final String OWNER_REMOVE = "OWNER_REMOVE";
+    static final String OWNERSHIP_TRANSFER = "OWNERSHIP_TRANSFER";
     private static final String OPERATION_KEY_CONSTRAINT =
             "uk_dinner_household_operations_actor_key";
     private static final Logger LOGGER =
@@ -34,6 +35,7 @@ public class DinnerHouseholdOperationService {
     private final HouseholdOperationFingerprinter fingerprinter;
     private final DinnerHouseholdOperationRetentionService retentionService;
     private final DinnerMembershipTerminationService terminationService;
+    private final DinnerHouseholdOwnershipService ownershipService;
     private final ObjectMapper objectMapper;
     private final Clock clock;
 
@@ -43,6 +45,7 @@ public class DinnerHouseholdOperationService {
             HouseholdOperationFingerprinter fingerprinter,
             DinnerHouseholdOperationRetentionService retentionService,
             DinnerMembershipTerminationService terminationService,
+            DinnerHouseholdOwnershipService ownershipService,
             ObjectMapper objectMapper
     ) {
         this(
@@ -50,6 +53,7 @@ public class DinnerHouseholdOperationService {
                 fingerprinter,
                 retentionService,
                 terminationService,
+                ownershipService,
                 objectMapper,
                 Clock.systemUTC());
     }
@@ -59,6 +63,7 @@ public class DinnerHouseholdOperationService {
             HouseholdOperationFingerprinter fingerprinter,
             DinnerHouseholdOperationRetentionService retentionService,
             DinnerMembershipTerminationService terminationService,
+            DinnerHouseholdOwnershipService ownershipService,
             ObjectMapper objectMapper,
             Clock clock
     ) {
@@ -66,6 +71,7 @@ public class DinnerHouseholdOperationService {
         this.fingerprinter = fingerprinter;
         this.retentionService = retentionService;
         this.terminationService = terminationService;
+        this.ownershipService = ownershipService;
         this.objectMapper = objectMapper;
         this.clock = clock;
     }
@@ -104,6 +110,24 @@ public class DinnerHouseholdOperationService {
                 idempotencyKey));
     }
 
+    public HouseholdMutationResponse transferOwnership(
+            Long actorUserId,
+            Long actorMembershipId,
+            Long expectedHouseholdVersion,
+            Long targetMembershipId,
+            Long targetMembershipVersion,
+            String idempotencyKey
+    ) {
+        return execute(command(
+                actorUserId,
+                actorMembershipId,
+                expectedHouseholdVersion,
+                targetMembershipId,
+                targetMembershipVersion,
+                OWNERSHIP_TRANSFER,
+                idempotencyKey));
+    }
+
     private HouseholdMutationResponse execute(HouseholdOperationCommand command) {
         cleanupExpiredBestEffort();
         DinnerHouseholdOperationEntity existing =
@@ -114,7 +138,7 @@ public class DinnerHouseholdOperationService {
         }
 
         try {
-            return terminationService.terminate(command);
+            return executeLocked(command);
         } catch (DuplicateKeyException exception) {
             if (!causedByOperationKey(exception)) {
                 throw exception;
@@ -127,6 +151,14 @@ public class DinnerHouseholdOperationService {
             }
             return replay(command, winner, objectMapper);
         }
+    }
+
+    private HouseholdMutationResponse executeLocked(HouseholdOperationCommand command) {
+        return switch (command.operationType()) {
+            case MEMBER_LEAVE, OWNER_REMOVE -> terminationService.terminate(command);
+            case OWNERSHIP_TRANSFER -> ownershipService.transfer(command);
+            default -> throw new IllegalArgumentException("Unsupported household operation");
+        };
     }
 
     private HouseholdOperationCommand command(

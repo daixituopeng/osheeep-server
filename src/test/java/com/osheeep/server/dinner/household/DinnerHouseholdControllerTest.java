@@ -51,6 +51,7 @@ class DinnerHouseholdControllerTest {
     private static final Instant EXPIRES_AT = Instant.parse("2026-07-12T06:00:00Z");
     private static final String LEAVE_KEY = "00000000-0000-4000-8000-000000000031";
     private static final String REMOVAL_KEY = "00000000-0000-4000-8000-000000000032";
+    private static final String TRANSFER_KEY = "00000000-0000-4000-8000-000000000033";
 
     @Autowired private MockMvc mockMvc;
     @Autowired private JwtService jwtService;
@@ -385,6 +386,33 @@ class DinnerHouseholdControllerTest {
         verify(householdOperationService).remove(7L, 31L, 7L, 32L, 2L, REMOVAL_KEY);
     }
 
+    @Test
+    void ownershipTransferForwardsAllConcurrencyInputsAndReturnsMinimalResult()
+            throws Exception {
+        when(householdOperationService.transferOwnership(
+                7L, 31L, 7L, 32L, 2L, TRANSFER_KEY))
+                .thenReturn(new HouseholdMutationResponse(
+                        "OWNERSHIP_TRANSFER", false, true, 8L));
+
+        mockMvc.perform(authenticated(post("/api/dinner/household/ownership-transfer"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"actorMembershipId\":31,\"expectedVersion\":7,"
+                                + "\"targetMembershipId\":32,"
+                                + "\"targetMembershipVersion\":2,"
+                                + "\"idempotencyKey\":\"" + TRANSFER_KEY + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.operationType").value("OWNERSHIP_TRANSFER"))
+                .andExpect(jsonPath("$.data.replayed").value(false))
+                .andExpect(jsonPath("$.data.actorHasHousehold").value(true))
+                .andExpect(jsonPath("$.data.householdVersion").value(8))
+                .andExpect(jsonPath("$.data.actorMembershipId").doesNotExist())
+                .andExpect(jsonPath("$.data.targetMembershipId").doesNotExist())
+                .andExpect(jsonPath("$.data.idempotencyKey").doesNotExist());
+
+        verify(householdOperationService).transferOwnership(
+                7L, 31L, 7L, 32L, 2L, TRANSFER_KEY);
+    }
+
     @ParameterizedTest
     @MethodSource("invalidLeaveRequests")
     void leaveRejectsInvalidRequestBodiesBeforeCallingService(String body) throws Exception {
@@ -407,6 +435,36 @@ class DinnerHouseholdControllerTest {
                 .andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"));
 
         verifyNoInteractions(householdOperationService);
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidOwnershipTransferRequests")
+    void ownershipTransferRejectsInvalidBodiesBeforeCallingService(String body)
+            throws Exception {
+        mockMvc.perform(authenticated(post("/api/dinner/household/ownership-transfer"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"));
+
+        verifyNoInteractions(householdOperationService);
+    }
+
+    @Test
+    void ownershipTransferMapsOwnerPermissionFailureToForbidden() throws Exception {
+        when(householdOperationService.transferOwnership(
+                7L, 32L, 7L, 31L, 3L, TRANSFER_KEY))
+                .thenThrow(new BusinessException(ErrorCode.DINNER_HOUSEHOLD_OWNER_REQUIRED));
+
+        mockMvc.perform(authenticated(post("/api/dinner/household/ownership-transfer"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"actorMembershipId\":32,\"expectedVersion\":7,"
+                                + "\"targetMembershipId\":31,"
+                                + "\"targetMembershipVersion\":3,"
+                                + "\"idempotencyKey\":\"" + TRANSFER_KEY + "\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.errorCode")
+                        .value("DINNER_HOUSEHOLD_OWNER_REQUIRED"));
     }
 
     @Test
@@ -621,6 +679,12 @@ class DinnerHouseholdControllerTest {
                         .content("{\"actorMembershipId\":31,\"expectedVersion\":7,"
                                 + "\"targetMembershipVersion\":2,"
                                 + "\"idempotencyKey\":\"" + REMOVAL_KEY + "\"}")),
+                Arguments.of(post("/api/dinner/household/ownership-transfer")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"actorMembershipId\":31,\"expectedVersion\":7,"
+                                + "\"targetMembershipId\":32,"
+                                + "\"targetMembershipVersion\":2,"
+                                + "\"idempotencyKey\":\"" + TRANSFER_KEY + "\"}")),
                 Arguments.of(post("/api/dinner/households/join")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"inviteCode\":\"DINNER 1234\"}")));
@@ -667,6 +731,28 @@ class DinnerHouseholdControllerTest {
                 Arguments.of("{\"actorMembershipId\":31,\"expectedVersion\":7,"
                         + "\"targetMembershipVersion\":2,"
                         + "\"idempotencyKey\":\"00000000-0000-4000-8000-0000000000320\"}"));
+    }
+
+    private static Stream<Arguments> invalidOwnershipTransferRequests() {
+        return Stream.of(
+                Arguments.of("{\"actorMembershipId\":0,\"expectedVersion\":7,"
+                        + "\"targetMembershipId\":32,\"targetMembershipVersion\":2,"
+                        + "\"idempotencyKey\":\"" + TRANSFER_KEY + "\"}"),
+                Arguments.of("{\"actorMembershipId\":31,\"expectedVersion\":0,"
+                        + "\"targetMembershipId\":32,\"targetMembershipVersion\":2,"
+                        + "\"idempotencyKey\":\"" + TRANSFER_KEY + "\"}"),
+                Arguments.of("{\"actorMembershipId\":31,\"expectedVersion\":7,"
+                        + "\"targetMembershipId\":0,\"targetMembershipVersion\":2,"
+                        + "\"idempotencyKey\":\"" + TRANSFER_KEY + "\"}"),
+                Arguments.of("{\"actorMembershipId\":31,\"expectedVersion\":7,"
+                        + "\"targetMembershipId\":32,\"targetMembershipVersion\":0,"
+                        + "\"idempotencyKey\":\"" + TRANSFER_KEY + "\"}"),
+                Arguments.of("{\"actorMembershipId\":31,\"expectedVersion\":7,"
+                        + "\"targetMembershipVersion\":2,"
+                        + "\"idempotencyKey\":\"" + TRANSFER_KEY + "\"}"),
+                Arguments.of("{\"actorMembershipId\":31,\"expectedVersion\":7,"
+                        + "\"targetMembershipId\":32,\"targetMembershipVersion\":2,"
+                        + "\"idempotencyKey\":\"   \"}"));
     }
 
     private HouseholdResponse household(

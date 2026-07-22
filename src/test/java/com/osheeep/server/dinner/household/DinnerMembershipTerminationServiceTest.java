@@ -309,6 +309,70 @@ class DinnerMembershipTerminationServiceTest {
         assertThat(result.householdVersion()).isEqualTo(9L);
     }
 
+    @Test
+    void transferredFormerOwnerCanLeaveWhileNewOwnerAndSharedDataRemain() {
+        DinnerHouseholdMemberEntity formerOwner = membership(
+                OWNER_MEMBERSHIP_ID,
+                OWNER_USER_ID,
+                "MEMBER",
+                1,
+                OWNER_MEMBERSHIP_VERSION + 1);
+        DinnerHouseholdMemberEntity newOwner = membership(
+                MEMBER_MEMBERSHIP_ID,
+                MEMBER_USER_ID,
+                "OWNER",
+                2,
+                MEMBER_MEMBERSHIP_VERSION + 1);
+        DinnerHouseholdEntity transferredHousehold = household();
+        transferredHousehold.setVersion(HOUSEHOLD_VERSION + 1);
+        stubLockedContext(
+                OWNER_USER_ID,
+                formerOwner,
+                transferredHousehold,
+                List.of(formerOwner, newOwner));
+        stubEmptyChildLocks(OWNER_USER_ID);
+        when(memberMapper.endActiveMember(
+                OWNER_MEMBERSHIP_ID,
+                HOUSEHOLD_ID,
+                OWNER_USER_ID,
+                OWNER_MEMBERSHIP_VERSION + 1,
+                "LEFT",
+                NOW,
+                OWNER_USER_ID,
+                "SELF_LEFT")).thenReturn(1);
+        when(householdMapper.advanceMembershipAndInviteRevision(
+                HOUSEHOLD_ID, HOUSEHOLD_VERSION + 1, INVITE_REVISION)).thenReturn(1);
+        when(operationMapper.insert(any(DinnerHouseholdOperationEntity.class)))
+                .thenReturn(1);
+        HouseholdOperationCommand command = new HouseholdOperationCommand(
+                OWNER_USER_ID,
+                OWNER_MEMBERSHIP_ID,
+                HOUSEHOLD_VERSION + 1,
+                null,
+                null,
+                DinnerHouseholdOperationService.MEMBER_LEAVE,
+                "e5e7842d-2b5b-4a6c-8fa2-8fbd73cd1731",
+                "post-transfer-leave-fingerprint");
+
+        var result = service.terminate(command);
+
+        assertThat(result.actorHasHousehold()).isFalse();
+        assertThat(result.householdVersion()).isEqualTo(HOUSEHOLD_VERSION + 2);
+        assertThat(newOwner.getRole()).isEqualTo("OWNER");
+        assertThat(newOwner.getVersion()).isEqualTo(MEMBER_MEMBERSHIP_VERSION + 1);
+        verify(memberMapper).selectActiveByHouseholdIdForUpdate(HOUSEHOLD_ID);
+        verify(memberMapper).endActiveMember(
+                OWNER_MEMBERSHIP_ID,
+                HOUSEHOLD_ID,
+                OWNER_USER_ID,
+                OWNER_MEMBERSHIP_VERSION + 1,
+                "LEFT",
+                NOW,
+                OWNER_USER_ID,
+                "SELF_LEFT");
+        verifyNoMoreInteractions(inventoryMapper, ingredientMapper);
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void ownerCannotLeaveAOneOrTwoPersonHousehold(boolean householdHasMember) {

@@ -15,6 +15,7 @@ import com.osheeep.server.dinner.household.dto.JoinHouseholdRequest;
 import com.osheeep.server.dinner.household.dto.LeaveHouseholdRequest;
 import com.osheeep.server.dinner.household.dto.RemoveHouseholdMemberRequest;
 import com.osheeep.server.dinner.household.dto.RenameHouseholdRequest;
+import com.osheeep.server.dinner.household.dto.TransferHouseholdOwnershipRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -118,6 +119,20 @@ public class DinnerHouseholdController {
                 request.actorMembershipId(),
                 request.expectedVersion(),
                 parsedMembershipId,
+                request.targetMembershipVersion(),
+                request.idempotencyKey()));
+    }
+
+    @PostMapping("/household/ownership-transfer")
+    public ApiResponse<HouseholdMutationResponse> transferOwnership(
+            @AuthenticationPrincipal CurrentUser currentUser,
+            @Valid @RequestBody TransferHouseholdOwnershipRequest request
+    ) {
+        return ApiResponse.ok(householdOperationService.transferOwnership(
+                currentUser.id(),
+                request.actorMembershipId(),
+                request.expectedVersion(),
+                request.targetMembershipId(),
                 request.targetMembershipVersion(),
                 request.idempotencyKey()));
     }

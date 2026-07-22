@@ -2,6 +2,7 @@ package com.osheeep.server.dinner.household.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.osheeep.server.dinner.household.entity.DinnerHouseholdEntity;
+import java.time.LocalDateTime;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
@@ -28,6 +29,15 @@ public interface DinnerHouseholdMapper extends BaseMapper<DinnerHouseholdEntity>
             @Param("householdId") Long householdId,
             @Param("expectedVersion") Long expectedVersion,
             @Param("expectedInviteRevision") Long expectedInviteRevision);
+
+    @Update("UPDATE dinner_households "
+            + "SET version = version + 1, admin_changed_at = #{adminChangedAt} "
+            + "WHERE id = #{householdId} AND status = 'ACTIVE' "
+            + "AND version = #{expectedVersion}")
+    int advanceOwnership(
+            @Param("householdId") Long householdId,
+            @Param("expectedVersion") Long expectedVersion,
+            @Param("adminChangedAt") LocalDateTime adminChangedAt);
 
     @Update("UPDATE dinner_households SET invite_revision = invite_revision + 1 "
             + "WHERE id = #{householdId} AND status = 'ACTIVE' "

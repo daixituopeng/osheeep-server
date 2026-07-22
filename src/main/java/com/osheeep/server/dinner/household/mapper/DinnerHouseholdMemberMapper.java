@@ -67,4 +67,24 @@ public interface DinnerHouseholdMemberMapper extends BaseMapper<DinnerHouseholdM
             @Param("endedAt") LocalDateTime endedAt,
             @Param("endedBy") Long endedBy,
             @Param("endReason") String endReason);
+
+    @Update("UPDATE dinner_household_members SET role = 'MEMBER', version = version + 1 "
+            + "WHERE id = #{membershipId} AND household_id = #{householdId} "
+            + "AND user_id = #{userId} AND role = 'OWNER' AND status = 'ACTIVE' "
+            + "AND version = #{expectedVersion}")
+    int demoteActiveOwner(
+            @Param("membershipId") Long membershipId,
+            @Param("householdId") Long householdId,
+            @Param("userId") Long userId,
+            @Param("expectedVersion") Long expectedVersion);
+
+    @Update("UPDATE dinner_household_members SET role = 'OWNER', version = version + 1 "
+            + "WHERE id = #{membershipId} AND household_id = #{householdId} "
+            + "AND user_id = #{userId} AND role = 'MEMBER' AND status = 'ACTIVE' "
+            + "AND version = #{expectedVersion}")
+    int promoteActiveMember(
+            @Param("membershipId") Long membershipId,
+            @Param("householdId") Long householdId,
+            @Param("userId") Long userId,
+            @Param("expectedVersion") Long expectedVersion);
 }

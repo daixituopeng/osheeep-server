@@ -57,6 +57,7 @@ class DinnerHouseholdOperationServiceTest {
     @Mock private DinnerHouseholdOperationMapper operationMapper;
     @Mock private DinnerHouseholdOperationRetentionService retentionService;
     @Mock private DinnerMembershipTerminationService terminationService;
+    @Mock private DinnerHouseholdOwnershipService ownershipService;
 
     private final HouseholdOperationFingerprinter fingerprinter =
             new HouseholdOperationFingerprinter("test-secret-at-least-32-characters");
@@ -70,6 +71,7 @@ class DinnerHouseholdOperationServiceTest {
                 fingerprinter,
                 retentionService,
                 terminationService,
+                ownershipService,
                 objectMapper,
                 Clock.fixed(NOW, ZoneOffset.UTC));
     }
@@ -127,6 +129,44 @@ class DinnerHouseholdOperationServiceTest {
                 .isEqualTo(leaveFingerprint(HOUSEHOLD_VERSION))
                 .matches("[0-9a-f]{64}");
         verify(retentionService).cleanupExpiredBatch();
+    }
+
+    @Test
+    void ownershipTransferBuildsTargetFingerprintAndDelegatesOnlyToOwnershipService() {
+        HouseholdMutationResponse fresh = new HouseholdMutationResponse(
+                "OWNERSHIP_TRANSFER", false, true, 9L);
+        when(operationMapper.selectByActorAndIdempotencyKey(ACTOR_ID, KEY))
+                .thenReturn(null);
+        when(ownershipService.transfer(any(HouseholdOperationCommand.class)))
+                .thenReturn(fresh);
+
+        assertThat(service.transferOwnership(
+                ACTOR_ID,
+                ACTOR_MEMBERSHIP_ID,
+                HOUSEHOLD_VERSION,
+                TARGET_MEMBERSHIP_ID,
+                TARGET_MEMBERSHIP_VERSION,
+                KEY)).isSameAs(fresh);
+
+        ArgumentCaptor<HouseholdOperationCommand> commandCaptor =
+                ArgumentCaptor.forClass(HouseholdOperationCommand.class);
+        verify(ownershipService).transfer(commandCaptor.capture());
+        HouseholdOperationCommand command = commandCaptor.getValue();
+        assertThat(command.actorUserId()).isEqualTo(ACTOR_ID);
+        assertThat(command.actorMembershipId()).isEqualTo(ACTOR_MEMBERSHIP_ID);
+        assertThat(command.expectedHouseholdVersion()).isEqualTo(HOUSEHOLD_VERSION);
+        assertThat(command.targetMembershipId()).isEqualTo(TARGET_MEMBERSHIP_ID);
+        assertThat(command.targetMembershipVersion()).isEqualTo(TARGET_MEMBERSHIP_VERSION);
+        assertThat(command.operationType()).isEqualTo("OWNERSHIP_TRANSFER");
+        assertThat(command.idempotencyKey()).isEqualTo(KEY);
+        assertThat(command.fingerprint()).isEqualTo(fingerprinter.fingerprint(
+                "OWNERSHIP_TRANSFER",
+                ACTOR_MEMBERSHIP_ID,
+                HOUSEHOLD_VERSION,
+                TARGET_MEMBERSHIP_ID,
+                TARGET_MEMBERSHIP_VERSION,
+                null));
+        verifyNoInteractions(terminationService);
     }
 
     @Test
