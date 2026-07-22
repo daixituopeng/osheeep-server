@@ -1,6 +1,5 @@
 package com.osheeep.server.user;
 
-import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.osheeep.server.auth.wechat.WechatUserIdentityEntity;
 import com.osheeep.server.auth.wechat.WechatUserIdentityMapper;
 import com.osheeep.server.common.error.BusinessException;
@@ -10,6 +9,7 @@ import com.osheeep.server.user.entity.UserEntity;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.Objects;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -54,22 +54,25 @@ public class AccountDeletionTransaction {
         if (!userService.isActive(user)) {
             throw new BusinessException(ErrorCode.UNAUTHORIZED, "User is not available");
         }
-        WechatUserIdentityEntity identity = identityMapper.selectOne(
-                Wrappers.<WechatUserIdentityEntity>lambdaQuery()
-                        .eq(WechatUserIdentityEntity::getUserId, userId)
-                        .last("LIMIT 1"));
-        if (identity == null || !Objects.equals(identity.getOpenid(), openid)) {
+        WechatUserIdentityEntity identity = identityMapper.selectByUserIdForUpdate(userId);
+        if (identity == null
+                || identity.getId() == null
+                || !Objects.equals(userId, identity.getUserId())
+                || !Objects.equals(identity.getOpenid(), openid)) {
             throw new BusinessException(ErrorCode.ACCOUNT_DELETION_IDENTITY_MISMATCH);
         }
 
         LocalDateTime deletedAt =
-                LocalDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
+                LocalDateTime.ofInstant(clock.instant(), ZoneOffset.UTC)
+                        .truncatedTo(ChronoUnit.MILLIS);
+        // Dinner rows still reference both the user and its identity context. Clean the
+        // aggregate first; identity deletion and anonymization are deliberately last.
+        dinnerCleanup.removeUser(userId, deletedAt);
         int deletedIdentityRows = identityMapper.deleteById(identity.getId());
         if (deletedIdentityRows != 1) {
             throw new IllegalStateException(
                     "Expected exactly one WeChat identity row to be deleted");
         }
-        dinnerCleanup.removeUser(userId, deletedAt);
         String anonymizedUsername = "deleted_user_" + userId;
         int anonymizedUserRows = userMapper.anonymizeActiveUser(
                 userId, anonymizedUsername, deletedAt);

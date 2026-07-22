@@ -52,6 +52,7 @@ class DinnerHouseholdControllerTest {
     private static final String LEAVE_KEY = "00000000-0000-4000-8000-000000000031";
     private static final String REMOVAL_KEY = "00000000-0000-4000-8000-000000000032";
     private static final String TRANSFER_KEY = "00000000-0000-4000-8000-000000000033";
+    private static final String DISSOLUTION_KEY = "00000000-0000-4000-8000-000000000034";
 
     @Autowired private MockMvc mockMvc;
     @Autowired private JwtService jwtService;
@@ -62,11 +63,14 @@ class DinnerHouseholdControllerTest {
     @MockitoBean
     private DinnerHouseholdOperationService householdOperationService;
 
+    @MockitoBean
+    private DinnerHouseholdDissolutionService householdDissolutionService;
+
     private String token;
 
     @BeforeEach
     void setUp() {
-        reset(householdService, householdOperationService);
+        reset(householdService, householdOperationService, householdDissolutionService);
         token = jwtService.generateToken(new CurrentUser(7L, "wx_user"));
     }
 
@@ -413,6 +417,44 @@ class DinnerHouseholdControllerTest {
                 7L, 31L, 7L, 32L, 2L, TRANSFER_KEY);
     }
 
+    @Test
+    void dissolutionForwardsVerificationAndReturnsNullHouseholdVersion() throws Exception {
+        when(householdDissolutionService.dissolve(
+                7L, 31L, 7L, "我们的小家", "fresh-code", DISSOLUTION_KEY))
+                .thenReturn(new HouseholdMutationResponse(
+                        "HOUSEHOLD_DISSOLUTION", false, false, null));
+
+        mockMvc.perform(authenticated(post("/api/dinner/household/dissolution"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"actorMembershipId\":31,\"expectedVersion\":7,"
+                                + "\"householdName\":\"我们的小家\","
+                                + "\"code\":\"fresh-code\","
+                                + "\"idempotencyKey\":\"" + DISSOLUTION_KEY + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.operationType")
+                        .value("HOUSEHOLD_DISSOLUTION"))
+                .andExpect(jsonPath("$.data.replayed").value(false))
+                .andExpect(jsonPath("$.data.actorHasHousehold").value(false))
+                .andExpect(jsonPath("$.data.householdVersion").value(nullValue()))
+                .andExpect(jsonPath("$.data.code").doesNotExist())
+                .andExpect(jsonPath("$.data.householdName").doesNotExist());
+
+        verify(householdDissolutionService).dissolve(
+                7L, 31L, 7L, "我们的小家", "fresh-code", DISSOLUTION_KEY);
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidDissolutionRequests")
+    void dissolutionRejectsInvalidBodyBeforeCallingService(String body) throws Exception {
+        mockMvc.perform(authenticated(post("/api/dinner/household/dissolution"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"));
+
+        verifyNoInteractions(householdDissolutionService);
+    }
+
     @ParameterizedTest
     @MethodSource("invalidLeaveRequests")
     void leaveRejectsInvalidRequestBodiesBeforeCallingService(String body) throws Exception {
@@ -685,6 +727,12 @@ class DinnerHouseholdControllerTest {
                                 + "\"targetMembershipId\":32,"
                                 + "\"targetMembershipVersion\":2,"
                                 + "\"idempotencyKey\":\"" + TRANSFER_KEY + "\"}")),
+                Arguments.of(post("/api/dinner/household/dissolution")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"actorMembershipId\":31,\"expectedVersion\":7,"
+                                + "\"householdName\":\"我们的小家\","
+                                + "\"code\":\"fresh-code\","
+                                + "\"idempotencyKey\":\"" + DISSOLUTION_KEY + "\"}")),
                 Arguments.of(post("/api/dinner/households/join")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"inviteCode\":\"DINNER 1234\"}")));
@@ -753,6 +801,25 @@ class DinnerHouseholdControllerTest {
                 Arguments.of("{\"actorMembershipId\":31,\"expectedVersion\":7,"
                         + "\"targetMembershipId\":32,\"targetMembershipVersion\":2,"
                         + "\"idempotencyKey\":\"   \"}"));
+    }
+
+    private static Stream<Arguments> invalidDissolutionRequests() {
+        return Stream.of(
+                Arguments.of("{\"actorMembershipId\":0,\"expectedVersion\":7,"
+                        + "\"householdName\":\"我们的小家\",\"code\":\"fresh-code\","
+                        + "\"idempotencyKey\":\"" + DISSOLUTION_KEY + "\"}"),
+                Arguments.of("{\"actorMembershipId\":31,\"expectedVersion\":0,"
+                        + "\"householdName\":\"我们的小家\",\"code\":\"fresh-code\","
+                        + "\"idempotencyKey\":\"" + DISSOLUTION_KEY + "\"}"),
+                Arguments.of("{\"actorMembershipId\":31,\"expectedVersion\":7,"
+                        + "\"householdName\":\"   \",\"code\":\"fresh-code\","
+                        + "\"idempotencyKey\":\"" + DISSOLUTION_KEY + "\"}"),
+                Arguments.of("{\"actorMembershipId\":31,\"expectedVersion\":7,"
+                        + "\"householdName\":\"我们的小家\",\"code\":\"   \","
+                        + "\"idempotencyKey\":\"" + DISSOLUTION_KEY + "\"}"),
+                Arguments.of("{\"actorMembershipId\":31,\"expectedVersion\":7,"
+                        + "\"householdName\":\"我们的小家\",\"code\":\"fresh-code\","
+                        + "\"idempotencyKey\":\"short\"}"));
     }
 
     private HouseholdResponse household(

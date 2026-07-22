@@ -1,0 +1,405 @@
+package com.osheeep.server.dinner.household;
+
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.osheeep.server.dinner.household.entity.DinnerHouseholdMemberEntity;
+import com.osheeep.server.dinner.household.mapper.DinnerHouseholdMapper;
+import com.osheeep.server.dinner.household.mapper.DinnerHouseholdMemberMapper;
+import com.osheeep.server.dinner.household.mapper.DinnerHouseholdOperationMapper;
+import com.osheeep.server.dinner.household.mapper.DinnerInviteCodeMapper;
+import com.osheeep.server.dinner.ingredient.entity.DinnerHouseholdInventoryEntity;
+import com.osheeep.server.dinner.ingredient.entity.DinnerIngredientEntity;
+import com.osheeep.server.dinner.ingredient.mapper.DinnerHouseholdInventoryMapper;
+import com.osheeep.server.dinner.ingredient.mapper.DinnerIngredientMapper;
+import com.osheeep.server.dinner.menu.entity.DinnerMenuActionEntity;
+import com.osheeep.server.dinner.menu.entity.DinnerMenuEntity;
+import com.osheeep.server.dinner.menu.entity.DinnerMenuSelectionEntity;
+import com.osheeep.server.dinner.menu.mapper.DinnerMenuActionMapper;
+import com.osheeep.server.dinner.menu.mapper.DinnerMenuMapper;
+import com.osheeep.server.dinner.menu.mapper.DinnerMenuSelectionMapper;
+import com.osheeep.server.dinner.recipe.entity.DinnerRecipeEntity;
+import com.osheeep.server.dinner.recipe.entity.DinnerRecipeIngredientEntity;
+import com.osheeep.server.dinner.recipe.entity.DinnerRecipeMethodEntity;
+import com.osheeep.server.dinner.recipe.entity.DinnerRecipeMethodStepEntity;
+import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeIngredientMapper;
+import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMapper;
+import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMethodMapper;
+import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMethodStepMapper;
+import com.osheeep.server.dinner.record.entity.DinnerCookingRecordEntity;
+import com.osheeep.server.dinner.record.entity.DinnerRecordDishSnapshotEntity;
+import com.osheeep.server.dinner.record.mapper.DinnerCookingRecordMapper;
+import com.osheeep.server.dinner.record.mapper.DinnerRecordDishSnapshotMapper;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+
+/**
+ * Locks and removes one household aggregate while retaining personal drafts.
+ * Image assets are global catalog data and are deliberately never removed here.
+ */
+@Service
+public class DinnerHouseholdDataPurger {
+
+    private final DinnerHouseholdMapper householdMapper;
+    private final DinnerHouseholdMemberMapper memberMapper;
+    private final DinnerHouseholdOperationMapper operationMapper;
+    private final DinnerInviteCodeMapper inviteMapper;
+    private final DinnerMenuMapper menuMapper;
+    private final DinnerMenuSelectionMapper selectionMapper;
+    private final DinnerMenuActionMapper actionMapper;
+    private final DinnerCookingRecordMapper recordMapper;
+    private final DinnerRecordDishSnapshotMapper snapshotMapper;
+    private final DinnerRecipeMapper recipeMapper;
+    private final DinnerRecipeMethodMapper methodMapper;
+    private final DinnerRecipeMethodStepMapper stepMapper;
+    private final DinnerRecipeIngredientMapper recipeIngredientMapper;
+    private final DinnerHouseholdInventoryMapper inventoryMapper;
+    private final DinnerIngredientMapper ingredientMapper;
+
+    public DinnerHouseholdDataPurger(
+            DinnerHouseholdMapper householdMapper,
+            DinnerHouseholdMemberMapper memberMapper,
+            DinnerHouseholdOperationMapper operationMapper,
+            DinnerInviteCodeMapper inviteMapper,
+            DinnerMenuMapper menuMapper,
+            DinnerMenuSelectionMapper selectionMapper,
+            DinnerMenuActionMapper actionMapper,
+            DinnerCookingRecordMapper recordMapper,
+            DinnerRecordDishSnapshotMapper snapshotMapper,
+            DinnerRecipeMapper recipeMapper,
+            DinnerRecipeMethodMapper methodMapper,
+            DinnerRecipeMethodStepMapper stepMapper,
+            DinnerRecipeIngredientMapper recipeIngredientMapper,
+            DinnerHouseholdInventoryMapper inventoryMapper,
+            DinnerIngredientMapper ingredientMapper
+    ) {
+        this.householdMapper = householdMapper;
+        this.memberMapper = memberMapper;
+        this.operationMapper = operationMapper;
+        this.inviteMapper = inviteMapper;
+        this.menuMapper = menuMapper;
+        this.selectionMapper = selectionMapper;
+        this.actionMapper = actionMapper;
+        this.recordMapper = recordMapper;
+        this.snapshotMapper = snapshotMapper;
+        this.recipeMapper = recipeMapper;
+        this.methodMapper = methodMapper;
+        this.stepMapper = stepMapper;
+        this.recipeIngredientMapper = recipeIngredientMapper;
+        this.inventoryMapper = inventoryMapper;
+        this.ingredientMapper = ingredientMapper;
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void purgeHousehold(
+            Long householdId,
+            List<DinnerHouseholdMemberEntity> lockedMemberships,
+            Set<Long> draftCreatorIdsToDelete
+    ) {
+        requirePositive(householdId, "Household id");
+        validateLockedMemberships(householdId, lockedMemberships);
+        Set<Long> deletedDraftCreators = draftCreatorIdsToDelete == null
+                ? Set.of()
+                : Set.copyOf(draftCreatorIdsToDelete);
+
+        // The parent transaction has already locked user, identity, household and members.
+        // From here the lock order is fixed for every destructive lifecycle.
+        List<?> operations = requireList(
+                operationMapper.selectAllByHouseholdIdForUpdate(householdId));
+        List<?> invites = requireList(inviteMapper.selectAllByHouseholdIdForUpdate(householdId));
+        List<DinnerMenuEntity> menus = requireList(
+                menuMapper.selectAllByHouseholdIdForUpdate(householdId));
+        List<Long> menuIds = ids(menus.stream().map(DinnerMenuEntity::getId).toList(), "menu");
+        List<DinnerMenuSelectionEntity> selections = menuIds.isEmpty()
+                ? List.of()
+                : requireList(selectionMapper.selectByMenuIdsForUpdate(menuIds));
+        List<DinnerMenuActionEntity> actions = menuIds.isEmpty()
+                ? List.of()
+                : requireList(actionMapper.selectByMenuIdsForUpdate(menuIds));
+        List<DinnerCookingRecordEntity> records = requireList(
+                recordMapper.selectAllByHouseholdIdForUpdate(householdId));
+        List<Long> recordIds = ids(
+                records.stream().map(DinnerCookingRecordEntity::getId).toList(), "record");
+        List<DinnerRecordDishSnapshotEntity> snapshots = recordIds.isEmpty()
+                ? List.of()
+                : requireList(snapshotMapper.selectByRecordIdsForUpdate(recordIds));
+
+        List<DinnerRecipeEntity> recipes = requireList(
+                recipeMapper.selectByHouseholdIdForUpdate(householdId));
+        List<Long> recipeIds = ids(
+                recipes.stream().map(DinnerRecipeEntity::getId).toList(), "recipe");
+        List<DinnerRecipeEntity> lineageReferences = recipeIds.isEmpty()
+                ? List.of()
+                : requireList(recipeMapper.selectLineageReferencesForUpdate(recipeIds));
+        Map<Long, DinnerRecipeEntity> externalSources = lockExternalSources(recipes, recipeIds);
+        List<DinnerRecipeMethodEntity> methods = recipeIds.isEmpty()
+                ? List.of()
+                : requireList(methodMapper.selectByRecipeIdsForUpdate(recipeIds));
+        List<Long> methodIds = ids(
+                methods.stream().map(DinnerRecipeMethodEntity::getId).toList(), "recipe method");
+        List<DinnerRecipeMethodStepEntity> steps = methodIds.isEmpty()
+                ? List.of()
+                : requireList(stepMapper.selectByMethodIdsForUpdate(methodIds));
+        List<DinnerRecipeIngredientEntity> recipeIngredients = recipeIds.isEmpty()
+                ? List.of()
+                : requireList(recipeIngredientMapper.selectByRecipeIdsForUpdate(recipeIds));
+        List<DinnerHouseholdInventoryEntity> inventory = requireList(
+                inventoryMapper.selectAllByHouseholdIdForUpdate(householdId));
+        List<DinnerIngredientEntity> householdIngredients = requireList(
+                ingredientMapper.selectAllHouseholdIngredientsForUpdate(householdId));
+
+        // Keep references live so mocks and reviewers can verify that every selected row was
+        // locked before the first delete. Structural validation below also rejects corrupt sets.
+        validateAggregateRows(householdId, menus, selections, actions, records, snapshots,
+                recipes, lineageReferences, methods, steps, recipeIngredients, inventory,
+                householdIngredients, operations, invites);
+
+        Set<Long> deletingRecipeIds = new HashSet<>();
+        List<DinnerRecipeEntity> retainedDrafts = recipes.stream()
+                .filter(recipe -> isRetainedDraft(recipe, deletedDraftCreators))
+                .toList();
+        Set<Long> retainedDraftIds = new HashSet<>(
+                retainedDrafts.stream().map(DinnerRecipeEntity::getId).toList());
+        for (Long recipeId : recipeIds) {
+            if (!retainedDraftIds.contains(recipeId)) {
+                deletingRecipeIds.add(recipeId);
+            }
+        }
+
+        List<Long> deletingIds = deletingRecipeIds.stream().sorted().toList();
+        List<Long> retainedIds = retainedDraftIds.stream().sorted().toList();
+        List<Long> householdIngredientIds = ids(householdIngredients.stream()
+                .map(DinnerIngredientEntity::getId).toList(), "household ingredient");
+        if (!householdIngredientIds.isEmpty() && !retainedIds.isEmpty()) {
+            recipeIngredientMapper.delete(Wrappers.<DinnerRecipeIngredientEntity>lambdaQuery()
+                    .in(DinnerRecipeIngredientEntity::getRecipeId, retainedIds)
+                    .in(DinnerRecipeIngredientEntity::getIngredientId, householdIngredientIds));
+        }
+        detachRetainedDrafts(householdId, retainedDrafts, externalSources, deletingRecipeIds);
+
+        deleteMenuAndRecordData(householdId, menuIds, recordIds);
+        inviteMapper.delete(Wrappers.lambdaQuery(
+                com.osheeep.server.dinner.household.entity.DinnerInviteCodeEntity.class)
+                .eq(com.osheeep.server.dinner.household.entity.DinnerInviteCodeEntity::getHouseholdId,
+                        householdId));
+        inventoryMapper.delete(Wrappers.<DinnerHouseholdInventoryEntity>lambdaQuery()
+                .eq(DinnerHouseholdInventoryEntity::getHouseholdId, householdId));
+
+        clearLineageReferences(deletingIds);
+        deleteRecipeData(deletingIds, methods);
+        if (!deletingIds.isEmpty()) {
+            recipeMapper.deleteBatchIds(deletingIds);
+        }
+        ingredientMapper.delete(Wrappers.<DinnerIngredientEntity>lambdaQuery()
+                .eq(DinnerIngredientEntity::getHouseholdId, householdId));
+
+        memberMapper.delete(Wrappers.<DinnerHouseholdMemberEntity>lambdaQuery()
+                .eq(DinnerHouseholdMemberEntity::getHouseholdId, householdId));
+        if (householdMapper.deleteById(householdId) != 1) {
+            throw new IllegalStateException("Expected exactly one household row to be deleted");
+        }
+        operationMapper.delete(Wrappers.lambdaQuery(
+                com.osheeep.server.dinner.household.entity.DinnerHouseholdOperationEntity.class)
+                .eq(com.osheeep.server.dinner.household.entity.DinnerHouseholdOperationEntity::getHouseholdId,
+                        householdId));
+    }
+
+    private Map<Long, DinnerRecipeEntity> lockExternalSources(
+            List<DinnerRecipeEntity> recipes,
+            List<Long> householdRecipeIds
+    ) {
+        Set<Long> householdIds = Set.copyOf(householdRecipeIds);
+        List<Long> sourceIds = recipes.stream()
+                .map(DinnerRecipeEntity::getSourceRecipeId)
+                .filter(Objects::nonNull)
+                .filter(id -> !householdIds.contains(id))
+                .distinct()
+                .sorted()
+                .toList();
+        if (sourceIds.isEmpty()) {
+            return Map.of();
+        }
+        List<DinnerRecipeEntity> sources = requireList(recipeMapper.selectByIdsForUpdate(sourceIds));
+        Map<Long, DinnerRecipeEntity> result = new HashMap<>();
+        for (DinnerRecipeEntity source : sources) {
+            if (source == null || source.getId() == null || result.put(source.getId(), source) != null) {
+                throw new IllegalStateException("External recipe source lock set is invalid");
+            }
+        }
+        return Map.copyOf(result);
+    }
+
+    private void deleteMenuAndRecordData(
+            Long householdId,
+            List<Long> menuIds,
+            List<Long> recordIds
+    ) {
+        if (!recordIds.isEmpty()) {
+            snapshotMapper.delete(Wrappers.<DinnerRecordDishSnapshotEntity>lambdaQuery()
+                    .in(DinnerRecordDishSnapshotEntity::getRecordId, recordIds));
+        }
+        recordMapper.delete(Wrappers.<DinnerCookingRecordEntity>lambdaQuery()
+                .eq(DinnerCookingRecordEntity::getHouseholdId, householdId));
+        if (!menuIds.isEmpty()) {
+            actionMapper.delete(Wrappers.<DinnerMenuActionEntity>lambdaQuery()
+                    .in(DinnerMenuActionEntity::getMenuId, menuIds));
+            selectionMapper.delete(Wrappers.<DinnerMenuSelectionEntity>lambdaQuery()
+                    .in(DinnerMenuSelectionEntity::getMenuId, menuIds));
+        }
+        menuMapper.delete(Wrappers.<DinnerMenuEntity>lambdaQuery()
+                .eq(DinnerMenuEntity::getHouseholdId, householdId));
+    }
+
+    private void deleteRecipeData(
+            List<Long> deletingRecipeIds,
+            List<DinnerRecipeMethodEntity> methods
+    ) {
+        if (deletingRecipeIds.isEmpty()) {
+            return;
+        }
+        List<Long> deletingMethodIds = methods.stream()
+                .filter(method -> deletingRecipeIds.contains(method.getRecipeId()))
+                .map(DinnerRecipeMethodEntity::getId)
+                .sorted()
+                .toList();
+        if (!deletingMethodIds.isEmpty()) {
+            stepMapper.delete(Wrappers.<DinnerRecipeMethodStepEntity>lambdaQuery()
+                    .in(DinnerRecipeMethodStepEntity::getMethodId, deletingMethodIds));
+        }
+        methodMapper.delete(Wrappers.<DinnerRecipeMethodEntity>lambdaQuery()
+                .in(DinnerRecipeMethodEntity::getRecipeId, deletingRecipeIds));
+        recipeIngredientMapper.delete(Wrappers.<DinnerRecipeIngredientEntity>lambdaQuery()
+                .in(DinnerRecipeIngredientEntity::getRecipeId, deletingRecipeIds));
+    }
+
+    private void clearLineageReferences(List<Long> deletingRecipeIds) {
+        if (deletingRecipeIds.isEmpty()) {
+            return;
+        }
+        recipeMapper.update(null, Wrappers.<DinnerRecipeEntity>lambdaUpdate()
+                .in(DinnerRecipeEntity::getSourceRecipeId, deletingRecipeIds)
+                .set(DinnerRecipeEntity::getSourceRecipeId, null));
+        recipeMapper.update(null, Wrappers.<DinnerRecipeEntity>lambdaUpdate()
+                .in(DinnerRecipeEntity::getRevisionOfRecipeId, deletingRecipeIds)
+                .set(DinnerRecipeEntity::getRevisionOfRecipeId, null)
+                .set(DinnerRecipeEntity::getBasePublishedVersion, null));
+    }
+
+    private void detachRetainedDrafts(
+            Long householdId,
+            List<DinnerRecipeEntity> retainedDrafts,
+            Map<Long, DinnerRecipeEntity> externalSources,
+            Set<Long> deletingRecipeIds
+    ) {
+        for (DinnerRecipeEntity draft : retainedDrafts) {
+            Long retainedSourceId = draft.getSourceRecipeId();
+            DinnerRecipeEntity source = retainedSourceId == null
+                    ? null
+                    : externalSources.get(retainedSourceId);
+            if (retainedSourceId == null
+                    || deletingRecipeIds.contains(retainedSourceId)
+                    || source == null
+                    || !"SYSTEM".equals(source.getScope())) {
+                retainedSourceId = null;
+            }
+            if (recipeMapper.detachOwnedDraft(
+                    draft.getId(), householdId, draft.getCreatorId(), draft.getVersion(),
+                    retainedSourceId) != 1) {
+                throw new IllegalStateException("Personal draft changed during household purge");
+            }
+        }
+    }
+
+    private boolean isRetainedDraft(
+            DinnerRecipeEntity recipe,
+            Set<Long> deletedDraftCreators
+    ) {
+        return recipe != null
+                && "HOUSEHOLD".equals(recipe.getScope())
+                && "DRAFT".equals(recipe.getStatus())
+                && recipe.getCreatorId() != null
+                && !deletedDraftCreators.contains(recipe.getCreatorId());
+    }
+
+    private void validateLockedMemberships(
+            Long householdId,
+            List<DinnerHouseholdMemberEntity> memberships
+    ) {
+        List<DinnerHouseholdMemberEntity> safe = requireList(memberships);
+        Long previousId = null;
+        for (DinnerHouseholdMemberEntity member : safe) {
+            if (member == null || member.getId() == null
+                    || !Objects.equals(householdId, member.getHouseholdId())
+                    || previousId != null && member.getId() <= previousId) {
+                throw new IllegalStateException("Locked household membership set is invalid");
+            }
+            previousId = member.getId();
+        }
+    }
+
+    private void validateAggregateRows(
+            Long householdId,
+            List<DinnerMenuEntity> menus,
+            List<DinnerMenuSelectionEntity> selections,
+            List<DinnerMenuActionEntity> actions,
+            List<DinnerCookingRecordEntity> records,
+            List<DinnerRecordDishSnapshotEntity> snapshots,
+            List<DinnerRecipeEntity> recipes,
+            List<DinnerRecipeEntity> lineageReferences,
+            List<DinnerRecipeMethodEntity> methods,
+            List<DinnerRecipeMethodStepEntity> steps,
+            List<DinnerRecipeIngredientEntity> recipeIngredients,
+            List<DinnerHouseholdInventoryEntity> inventory,
+            List<DinnerIngredientEntity> ingredients,
+            List<?> operations,
+            List<?> invites
+    ) {
+        if (menus.stream().anyMatch(row -> row == null
+                || !Objects.equals(householdId, row.getHouseholdId()))
+                || records.stream().anyMatch(row -> row == null
+                || !Objects.equals(householdId, row.getHouseholdId()))
+                || recipes.stream().anyMatch(row -> row == null
+                || !Objects.equals(householdId, row.getHouseholdId()))
+                || inventory.stream().anyMatch(row -> row == null
+                || !Objects.equals(householdId, row.getHouseholdId()))
+                || ingredients.stream().anyMatch(row -> row == null
+                || !Objects.equals(householdId, row.getHouseholdId()))
+                || selections.stream().anyMatch(Objects::isNull)
+                || actions.stream().anyMatch(Objects::isNull)
+                || snapshots.stream().anyMatch(Objects::isNull)
+                || lineageReferences.stream().anyMatch(Objects::isNull)
+                || methods.stream().anyMatch(Objects::isNull)
+                || steps.stream().anyMatch(Objects::isNull)
+                || recipeIngredients.stream().anyMatch(Objects::isNull)
+                || operations.stream().anyMatch(Objects::isNull)
+                || invites.stream().anyMatch(Objects::isNull)) {
+            throw new IllegalStateException("Locked household aggregate is invalid");
+        }
+    }
+
+    private <T> List<T> requireList(List<T> values) {
+        if (values == null) {
+            throw new IllegalStateException("Household aggregate lock returned null");
+        }
+        return List.copyOf(values);
+    }
+
+    private List<Long> ids(List<Long> values, String label) {
+        if (values.stream().anyMatch(Objects::isNull)
+                || new HashSet<>(values).size() != values.size()) {
+            throw new IllegalStateException("Locked " + label + " ids are invalid");
+        }
+        return List.copyOf(values);
+    }
+
+    private void requirePositive(Long value, String label) {
+        if (value == null || value < 1) {
+            throw new IllegalArgumentException(label + " must be positive");
+        }
+    }
+}

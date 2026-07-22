@@ -31,6 +31,18 @@ public interface DinnerHouseholdMapper extends BaseMapper<DinnerHouseholdEntity>
             @Param("expectedInviteRevision") Long expectedInviteRevision);
 
     @Update("UPDATE dinner_households "
+            + "SET version = version + 1, invite_revision = invite_revision + 1, "
+            + "admin_changed_at = #{adminChangedAt} "
+            + "WHERE id = #{householdId} AND status = 'ACTIVE' "
+            + "AND version = #{expectedVersion} "
+            + "AND invite_revision = #{expectedInviteRevision}")
+    int advanceMembershipInviteAndOwnership(
+            @Param("householdId") Long householdId,
+            @Param("expectedVersion") Long expectedVersion,
+            @Param("expectedInviteRevision") Long expectedInviteRevision,
+            @Param("adminChangedAt") LocalDateTime adminChangedAt);
+
+    @Update("UPDATE dinner_households "
             + "SET version = version + 1, admin_changed_at = #{adminChangedAt} "
             + "WHERE id = #{householdId} AND status = 'ACTIVE' "
             + "AND version = #{expectedVersion}")

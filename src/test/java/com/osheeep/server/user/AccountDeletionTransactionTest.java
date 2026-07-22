@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -52,7 +53,7 @@ class AccountDeletionTransactionTest {
         WechatUserIdentityEntity identity = identity(71L, 7L, "openid-7");
         when(userMapper.selectByIdForUpdate(7L)).thenReturn(user);
         when(userService.isActive(user)).thenReturn(true);
-        when(identityMapper.selectOne(any())).thenReturn(identity);
+        when(identityMapper.selectByUserIdForUpdate(7L)).thenReturn(identity);
 
         assertThatThrownBy(() -> transaction.deleteVerified(7L, "openid-other"))
                 .isInstanceOfSatisfying(BusinessException.class, error ->
@@ -74,32 +75,34 @@ class AccountDeletionTransactionTest {
         WechatUserIdentityEntity identity = identity(71L, 7L, "openid-7");
         when(userMapper.selectByIdForUpdate(7L)).thenReturn(user);
         when(userService.isActive(user)).thenReturn(true);
-        when(identityMapper.selectOne(any())).thenReturn(identity);
+        when(identityMapper.selectByUserIdForUpdate(7L)).thenReturn(identity);
         when(identityMapper.deleteById(71L)).thenReturn(1);
         when(userMapper.anonymizeActiveUser(7L, "deleted_user_7", DELETED_AT)).thenReturn(1);
 
         transaction.deleteVerified(7L, "openid-7");
 
-        verify(identityMapper).deleteById(71L);
-        verify(dinnerCleanup).removeUser(7L, DELETED_AT);
-        verify(userMapper).anonymizeActiveUser(7L, "deleted_user_7", DELETED_AT);
+        org.mockito.InOrder order = inOrder(dinnerCleanup, identityMapper, userMapper);
+        order.verify(dinnerCleanup).removeUser(7L, DELETED_AT);
+        order.verify(identityMapper).deleteById(71L);
+        order.verify(userMapper).anonymizeActiveUser(
+                7L, "deleted_user_7", DELETED_AT);
         verify(userMapper, never()).updateById(any(UserEntity.class));
     }
 
     @Test
-    void identityDeletionAffectingNoRowsFailsBeforeCleanup() {
+    void identityDeletionAffectingNoRowsRollsBackCleanupBecauseIdentityIsDeletedLast() {
         UserEntity user = activeUser(7L);
         WechatUserIdentityEntity identity = identity(71L, 7L, "openid-7");
         when(userMapper.selectByIdForUpdate(7L)).thenReturn(user);
         when(userService.isActive(user)).thenReturn(true);
-        when(identityMapper.selectOne(any())).thenReturn(identity);
+        when(identityMapper.selectByUserIdForUpdate(7L)).thenReturn(identity);
         when(identityMapper.deleteById(71L)).thenReturn(0);
 
         assertThatThrownBy(() -> transaction.deleteVerified(7L, "openid-7"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("Expected exactly one WeChat identity row to be deleted");
 
-        verifyNoInteractions(dinnerCleanup);
+        verify(dinnerCleanup).removeUser(7L, DELETED_AT);
         verify(userMapper, never()).anonymizeActiveUser(anyLong(), any(), any());
     }
 
@@ -109,7 +112,7 @@ class AccountDeletionTransactionTest {
         WechatUserIdentityEntity identity = identity(71L, 7L, "openid-7");
         when(userMapper.selectByIdForUpdate(7L)).thenReturn(user);
         when(userService.isActive(user)).thenReturn(true);
-        when(identityMapper.selectOne(any())).thenReturn(identity);
+        when(identityMapper.selectByUserIdForUpdate(7L)).thenReturn(identity);
         when(identityMapper.deleteById(71L)).thenReturn(1);
         when(userMapper.anonymizeActiveUser(7L, "deleted_user_7", DELETED_AT)).thenReturn(0);
 

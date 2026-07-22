@@ -24,6 +24,11 @@ public interface DinnerMenuMapper extends BaseMapper<DinnerMenuEntity> {
     List<DinnerMenuEntity> selectUncompletedByHouseholdIdForUpdate(
             @Param("householdId") Long householdId);
 
+    @Select("SELECT * FROM dinner_menus "
+            + "WHERE household_id = #{householdId} ORDER BY id FOR UPDATE")
+    List<DinnerMenuEntity> selectAllByHouseholdIdForUpdate(
+            @Param("householdId") Long householdId);
+
     @Update({
         "<script>",
         "UPDATE dinner_menus",

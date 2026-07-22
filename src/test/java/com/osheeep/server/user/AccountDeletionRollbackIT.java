@@ -184,8 +184,11 @@ class AccountDeletionRollbackIT {
                 "SELECT id FROM dinner_households WHERE name = ? AND created_by = ?",
                 Long.class, householdName, userId);
         jdbcTemplate.update(
-                "INSERT INTO dinner_household_members (household_id, user_id) VALUES (?, ?)",
-                householdId, userId);
+                "INSERT INTO dinner_household_members "
+                        + "(household_id, user_id, role, status, seat_no, "
+                        + "history_visible_from) "
+                        + "VALUES (?, ?, 'OWNER', 'ACTIVE', 1, ?)",
+                householdId, userId, LocalDateTime.parse("2026-07-01T00:00:00"));
         jdbcTemplate.update(
                 "INSERT INTO dinner_invite_codes "
                         + "(household_id, code_hash, expires_at, created_by) VALUES (?, ?, ?, ?)",

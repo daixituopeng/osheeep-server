@@ -21,9 +21,37 @@ public interface DinnerRecipeMapper extends BaseMapper<DinnerRecipeEntity> {
     List<DinnerRecipeEntity> selectUnboundDraftsByCreatorForUpdate(
             @Param("creatorId") Long creatorId);
 
+    @Select("SELECT * FROM dinner_recipes "
+            + "WHERE creator_id = #{creatorId} AND scope = 'HOUSEHOLD' "
+            + "AND status = 'DRAFT' ORDER BY id FOR UPDATE")
+    List<DinnerRecipeEntity> selectAllDraftsByCreatorForUpdate(
+            @Param("creatorId") Long creatorId);
+
     @Select("SELECT * FROM dinner_recipes WHERE household_id = #{householdId} ORDER BY id")
     List<DinnerRecipeEntity> selectByHouseholdId(
             @Param("householdId") Long householdId);
+
+    @Select("SELECT * FROM dinner_recipes "
+            + "WHERE household_id = #{householdId} ORDER BY id FOR UPDATE")
+    List<DinnerRecipeEntity> selectByHouseholdIdForUpdate(
+            @Param("householdId") Long householdId);
+
+    @Select({
+        "<script>",
+        "SELECT * FROM dinner_recipes",
+        "WHERE source_recipe_id IN",
+        "<foreach collection=\"recipeIds\" item=\"recipeId\" open=\"(\" separator=\",\" close=\")\">",
+        "#{recipeId}",
+        "</foreach>",
+        "OR revision_of_recipe_id IN",
+        "<foreach collection=\"recipeIds\" item=\"recipeId\" open=\"(\" separator=\",\" close=\")\">",
+        "#{recipeId}",
+        "</foreach>",
+        "ORDER BY id FOR UPDATE",
+        "</script>"
+    })
+    List<DinnerRecipeEntity> selectLineageReferencesForUpdate(
+            @Param("recipeIds") List<Long> recipeIds);
 
     @Select({
         "<script>",

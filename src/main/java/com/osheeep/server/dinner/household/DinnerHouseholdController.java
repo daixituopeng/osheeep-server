@@ -6,6 +6,7 @@ import com.osheeep.server.common.error.BusinessException;
 import com.osheeep.server.common.error.ErrorCode;
 import com.osheeep.server.common.security.CurrentUser;
 import com.osheeep.server.dinner.household.dto.CreateHouseholdRequest;
+import com.osheeep.server.dinner.household.dto.DissolveHouseholdRequest;
 import com.osheeep.server.dinner.household.dto.HouseholdCreatedResponse;
 import com.osheeep.server.dinner.household.dto.HouseholdInviteStatusResponse;
 import com.osheeep.server.dinner.household.dto.HouseholdManagementResponse;
@@ -34,13 +35,16 @@ public class DinnerHouseholdController {
 
     private final DinnerHouseholdService householdService;
     private final DinnerHouseholdOperationService householdOperationService;
+    private final DinnerHouseholdDissolutionService householdDissolutionService;
 
     public DinnerHouseholdController(
             DinnerHouseholdService householdService,
-            DinnerHouseholdOperationService householdOperationService
+            DinnerHouseholdOperationService householdOperationService,
+            DinnerHouseholdDissolutionService householdDissolutionService
     ) {
         this.householdService = householdService;
         this.householdOperationService = householdOperationService;
+        this.householdDissolutionService = householdDissolutionService;
     }
 
     @GetMapping("/household")
@@ -134,6 +138,20 @@ public class DinnerHouseholdController {
                 request.expectedVersion(),
                 request.targetMembershipId(),
                 request.targetMembershipVersion(),
+                request.idempotencyKey()));
+    }
+
+    @PostMapping("/household/dissolution")
+    public ApiResponse<HouseholdMutationResponse> dissolve(
+            @AuthenticationPrincipal CurrentUser currentUser,
+            @Valid @RequestBody DissolveHouseholdRequest request
+    ) {
+        return ApiResponse.ok(householdDissolutionService.dissolve(
+                currentUser.id(),
+                request.actorMembershipId(),
+                request.expectedVersion(),
+                request.householdName(),
+                request.code(),
                 request.idempotencyKey()));
     }
 
