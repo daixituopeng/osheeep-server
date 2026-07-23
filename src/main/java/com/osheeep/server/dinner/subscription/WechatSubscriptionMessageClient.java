@@ -7,9 +7,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.osheeep.server.auth.wechat.WechatAccessTokenProvider;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
 
 @Component
 public class WechatSubscriptionMessageClient
@@ -17,6 +20,8 @@ public class WechatSubscriptionMessageClient
 
     private static final int INVALID_CREDENTIAL = 40001;
     private static final int INVALID_ACCESS_TOKEN = 40014;
+    private static final Logger log =
+            LoggerFactory.getLogger(WechatSubscriptionMessageClient.class);
 
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
@@ -54,6 +59,9 @@ public class WechatSubscriptionMessageClient
         try {
             return tokenProvider.currentToken();
         } catch (RuntimeException exception) {
+            log.warn(
+                    "WeChat subscription token unavailable, exception={}",
+                    exception.getClass().getSimpleName());
             throw new WechatSubscriptionTransportException();
         }
     }
@@ -75,9 +83,34 @@ public class WechatSubscriptionMessageClient
                 throw new WechatSubscriptionTransportException();
             }
             return objectMapper.readValue(body, SendResponse.class);
-        } catch (RestClientException | JsonProcessingException exception) {
+        } catch (RestClientException exception) {
+            log.warn(
+                    "WeChat subscription request failed, exception={}, rootCause={}, status={}",
+                    exception.getClass().getSimpleName(),
+                    rootCauseClass(exception),
+                    responseStatus(exception));
+            throw new WechatSubscriptionTransportException();
+        } catch (JsonProcessingException exception) {
+            log.warn(
+                    "WeChat subscription response parsing failed, exception={}",
+                    exception.getClass().getSimpleName());
             throw new WechatSubscriptionTransportException();
         }
+    }
+
+    private String responseStatus(RestClientException exception) {
+        if (exception instanceof RestClientResponseException responseException) {
+            return responseException.getStatusCode().toString();
+        }
+        return "unavailable";
+    }
+
+    private String rootCauseClass(Throwable exception) {
+        Throwable current = exception;
+        while (current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+        }
+        return current.getClass().getSimpleName();
     }
 
     private SendRequest toRequest(WechatSubscriptionMessage message) {

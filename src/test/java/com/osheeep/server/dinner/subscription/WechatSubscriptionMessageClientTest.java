@@ -105,6 +105,10 @@ class WechatSubscriptionMessageClientTest {
         assertThatThrownBy(() -> client.send(message()))
                 .isInstanceOf(WechatSubscriptionTransportException.class)
                 .hasMessage("WeChat subscription delivery is temporarily unavailable");
+        assertThat(output).contains(
+                "WeChat subscription request failed",
+                "InternalServerError",
+                "500 INTERNAL_SERVER_ERROR");
         assertThat(output).doesNotContain(
                 "secret-token", "openid-8", "template-runtime");
         server.verify();

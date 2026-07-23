@@ -10,15 +10,20 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
 
 @Component
 public class WechatAccessTokenClient implements WechatAccessTokenProvider {
 
     private static final long REFRESH_EARLY_SECONDS = 300;
     private static final long MINIMUM_CACHE_SECONDS = 60;
+    private static final Logger log =
+            LoggerFactory.getLogger(WechatAccessTokenClient.class);
 
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
@@ -102,12 +107,38 @@ public class WechatAccessTokenClient implements WechatAccessTokenProvider {
                     || response.accessToken() == null
                     || response.accessToken().isBlank()
                     || response.expiresIn() == null) {
+                log.warn("WeChat access token response rejected");
                 throw unavailable();
             }
             return response;
-        } catch (RestClientException | JsonProcessingException exception) {
+        } catch (RestClientException exception) {
+            log.warn(
+                    "WeChat access token request failed, exception={}, rootCause={}, status={}",
+                    exception.getClass().getSimpleName(),
+                    rootCauseClass(exception),
+                    responseStatus(exception));
+            throw unavailable();
+        } catch (JsonProcessingException exception) {
+            log.warn(
+                    "WeChat access token response parsing failed, exception={}",
+                    exception.getClass().getSimpleName());
             throw unavailable();
         }
+    }
+
+    private String responseStatus(RestClientException exception) {
+        if (exception instanceof RestClientResponseException responseException) {
+            return responseException.getStatusCode().toString();
+        }
+        return "unavailable";
+    }
+
+    private String rootCauseClass(Throwable exception) {
+        Throwable current = exception;
+        while (current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+        }
+        return current.getClass().getSimpleName();
     }
 
     private boolean isFresh(CachedToken token, Instant now) {
