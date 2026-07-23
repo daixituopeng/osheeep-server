@@ -34,6 +34,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeSet;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -109,8 +110,6 @@ public class DinnerHouseholdDataPurger {
 
         // The parent transaction has already locked user, identity, household and members.
         // From here the lock order is fixed for every destructive lifecycle.
-        List<?> operations = requireList(
-                operationMapper.selectAllByHouseholdIdForUpdate(householdId));
         List<?> invites = requireList(inviteMapper.selectAllByHouseholdIdForUpdate(householdId));
         List<DinnerMenuEntity> menus = requireList(
                 menuMapper.selectAllByHouseholdIdForUpdate(householdId));
@@ -129,14 +128,12 @@ public class DinnerHouseholdDataPurger {
                 ? List.of()
                 : requireList(snapshotMapper.selectByRecordIdsForUpdate(recordIds));
 
-        List<DinnerRecipeEntity> recipes = requireList(
-                recipeMapper.selectByHouseholdIdForUpdate(householdId));
+        LockedRecipeRows lockedRecipeRows = lockRecipeRows(householdId);
+        List<DinnerRecipeEntity> recipes = lockedRecipeRows.householdRecipes();
         List<Long> recipeIds = ids(
                 recipes.stream().map(DinnerRecipeEntity::getId).toList(), "recipe");
-        List<DinnerRecipeEntity> lineageReferences = recipeIds.isEmpty()
-                ? List.of()
-                : requireList(recipeMapper.selectLineageReferencesForUpdate(recipeIds));
-        Map<Long, DinnerRecipeEntity> externalSources = lockExternalSources(recipes, recipeIds);
+        List<DinnerRecipeEntity> lineageReferences = lockedRecipeRows.lineageReferences();
+        Map<Long, DinnerRecipeEntity> externalSources = lockedRecipeRows.externalSources();
         List<DinnerRecipeMethodEntity> methods = recipeIds.isEmpty()
                 ? List.of()
                 : requireList(methodMapper.selectByRecipeIdsForUpdate(recipeIds));
@@ -152,6 +149,8 @@ public class DinnerHouseholdDataPurger {
                 inventoryMapper.selectAllByHouseholdIdForUpdate(householdId));
         List<DinnerIngredientEntity> householdIngredients = requireList(
                 ingredientMapper.selectAllHouseholdIngredientsForUpdate(householdId));
+        List<?> operations = requireList(
+                operationMapper.selectAllByHouseholdIdForUpdate(householdId));
 
         // Keep references live so mocks and reviewers can verify that every selected row was
         // locked before the first delete. Structural validation below also rejects corrupt sets.
@@ -209,29 +208,115 @@ public class DinnerHouseholdDataPurger {
                         householdId));
     }
 
-    private Map<Long, DinnerRecipeEntity> lockExternalSources(
-            List<DinnerRecipeEntity> recipes,
-            List<Long> householdRecipeIds
-    ) {
-        Set<Long> householdIds = Set.copyOf(householdRecipeIds);
-        List<Long> sourceIds = recipes.stream()
+    private LockedRecipeRows lockRecipeRows(Long householdId) {
+        List<DinnerRecipeEntity> discoveredHouseholdRecipes =
+                requireList(recipeMapper.selectByHouseholdId(householdId));
+        List<Long> householdRecipeIds = sortedRecipeIds(
+                discoveredHouseholdRecipes, "household recipe");
+        Set<Long> householdRecipeIdSet = Set.copyOf(householdRecipeIds);
+        List<DinnerRecipeEntity> discoveredLineageReferences =
+                householdRecipeIds.isEmpty()
+                        ? List.of()
+                        : requireList(recipeMapper.selectList(
+                                Wrappers.<DinnerRecipeEntity>lambdaQuery()
+                                        .and(query -> query
+                                                .in(DinnerRecipeEntity::getSourceRecipeId,
+                                                        householdRecipeIds)
+                                                .or()
+                                                .in(DinnerRecipeEntity::getRevisionOfRecipeId,
+                                                        householdRecipeIds))
+                                        .orderByAsc(DinnerRecipeEntity::getId)));
+        List<Long> lineageReferenceIds = sortedRecipeIds(
+                discoveredLineageReferences, "lineage reference");
+        List<Long> externalSourceIds = discoveredHouseholdRecipes.stream()
                 .map(DinnerRecipeEntity::getSourceRecipeId)
                 .filter(Objects::nonNull)
-                .filter(id -> !householdIds.contains(id))
+                .filter(id -> !householdRecipeIdSet.contains(id))
                 .distinct()
                 .sorted()
                 .toList();
-        if (sourceIds.isEmpty()) {
-            return Map.of();
-        }
-        List<DinnerRecipeEntity> sources = requireList(recipeMapper.selectByIdsForUpdate(sourceIds));
-        Map<Long, DinnerRecipeEntity> result = new HashMap<>();
-        for (DinnerRecipeEntity source : sources) {
-            if (source == null || source.getId() == null || result.put(source.getId(), source) != null) {
-                throw new IllegalStateException("External recipe source lock set is invalid");
+
+        TreeSet<Long> relatedRecipeIdSet = new TreeSet<>();
+        relatedRecipeIdSet.addAll(householdRecipeIds);
+        relatedRecipeIdSet.addAll(lineageReferenceIds);
+        relatedRecipeIdSet.addAll(externalSourceIds);
+        List<Long> relatedRecipeIds = List.copyOf(relatedRecipeIdSet);
+        List<DinnerRecipeEntity> lockedRows = relatedRecipeIds.isEmpty()
+                ? List.of()
+                : requireList(recipeMapper.selectByIdsForUpdate(relatedRecipeIds));
+        Map<Long, DinnerRecipeEntity> lockedById = indexLockedRecipes(
+                lockedRows, relatedRecipeIdSet);
+
+        List<DinnerRecipeEntity> householdRecipes = householdRecipeIds.stream()
+                .map(recipeId -> requireLockedRecipe(lockedById, recipeId, "household recipe"))
+                .toList();
+        List<DinnerRecipeEntity> lineageReferences = lineageReferenceIds.stream()
+                .map(lockedById::get)
+                .filter(Objects::nonNull)
+                .toList();
+
+        Map<Long, DinnerRecipeEntity> externalSources = new HashMap<>();
+        for (DinnerRecipeEntity recipe : householdRecipes) {
+            Long sourceId = recipe.getSourceRecipeId();
+            if (sourceId == null || householdRecipeIdSet.contains(sourceId)) {
+                continue;
+            }
+            if (!relatedRecipeIdSet.contains(sourceId)) {
+                throw new IllegalStateException(
+                        "Household recipe source changed during aggregate lock");
+            }
+            DinnerRecipeEntity source = lockedById.get(sourceId);
+            if (source != null) {
+                externalSources.put(sourceId, source);
             }
         }
-        return Map.copyOf(result);
+
+        return new LockedRecipeRows(
+                householdRecipes,
+                lineageReferences,
+                Map.copyOf(externalSources));
+    }
+
+    private Map<Long, DinnerRecipeEntity> indexLockedRecipes(
+            List<DinnerRecipeEntity> lockedRows,
+            Set<Long> requestedIds
+    ) {
+        Map<Long, DinnerRecipeEntity> lockedById = new HashMap<>();
+        for (DinnerRecipeEntity recipe : lockedRows) {
+            if (recipe == null
+                    || recipe.getId() == null
+                    || !requestedIds.contains(recipe.getId())
+                    || lockedById.put(recipe.getId(), recipe) != null) {
+                throw new IllegalStateException("Related recipe lock set is invalid");
+            }
+        }
+        return lockedById;
+    }
+
+    private DinnerRecipeEntity requireLockedRecipe(
+            Map<Long, DinnerRecipeEntity> lockedById,
+            Long recipeId,
+            String label
+    ) {
+        DinnerRecipeEntity recipe = lockedById.get(recipeId);
+        if (recipe == null) {
+            throw new IllegalStateException("Locked " + label + " row is missing");
+        }
+        return recipe;
+    }
+
+    private List<Long> sortedRecipeIds(
+            List<DinnerRecipeEntity> recipes,
+            String label
+    ) {
+        if (recipes.stream().anyMatch(Objects::isNull)) {
+            throw new IllegalStateException("Discovered " + label + " rows are invalid");
+        }
+        return ids(
+                recipes.stream().map(DinnerRecipeEntity::getId).toList(), label)
+                .stream()
+                .sorted()
+                .toList();
     }
 
     private void deleteMenuAndRecordData(
@@ -401,5 +486,12 @@ public class DinnerHouseholdDataPurger {
         if (value == null || value < 1) {
             throw new IllegalArgumentException(label + " must be positive");
         }
+    }
+
+    private record LockedRecipeRows(
+            List<DinnerRecipeEntity> householdRecipes,
+            List<DinnerRecipeEntity> lineageReferences,
+            Map<Long, DinnerRecipeEntity> externalSources
+    ) {
     }
 }

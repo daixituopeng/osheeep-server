@@ -10,12 +10,15 @@ import static org.mockito.Mockito.verify;
 
 import com.osheeep.server.dinner.household.dto.HouseholdMutationResponse;
 import com.osheeep.server.dinner.household.entity.DinnerHouseholdOperationEntity;
+import com.osheeep.server.dinner.household.mapper.DinnerHouseholdMapper;
 import com.osheeep.server.dinner.household.mapper.DinnerHouseholdMemberMapper;
 import com.osheeep.server.dinner.household.mapper.DinnerHouseholdOperationMapper;
 import com.osheeep.server.dinner.recipe.DinnerCustomRecipeFlywayMigrationStrategy;
+import com.osheeep.server.user.AccountDeletionTransaction;
 import java.math.BigDecimal;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -69,8 +72,10 @@ class DinnerMembershipTerminationMySqlIT {
     @Autowired private DinnerHouseholdWriteService writeService;
     @Autowired private DinnerHouseholdDissolutionTransaction dissolutionTransaction;
     @Autowired private DinnerAccountCleanupService accountCleanupService;
+    @Autowired private AccountDeletionTransaction accountDeletionTransaction;
     @Autowired private HouseholdOperationFingerprinter fingerprinter;
     @Autowired private TransactionTemplate transactionTemplate;
+    @MockitoSpyBean private DinnerHouseholdMapper householdMapper;
     @MockitoSpyBean private DinnerHouseholdOperationMapper operationMapper;
     @MockitoSpyBean private DinnerHouseholdMemberMapper memberMapper;
 
@@ -89,7 +94,7 @@ class DinnerMembershipTerminationMySqlIT {
 
     @BeforeEach
     void seedDedicatedV8Database() {
-        reset(operationMapper, memberMapper);
+        reset(householdMapper, operationMapper, memberMapper);
         requireDedicatedV8Database();
 
         suffix = UUID.randomUUID().toString().replace("-", "");
@@ -113,7 +118,7 @@ class DinnerMembershipTerminationMySqlIT {
 
     @AfterEach
     void deleteOnlySeededRows() {
-        reset(operationMapper, memberMapper);
+        reset(householdMapper, operationMapper, memberMapper);
         if (suffix == null) {
             return;
         }
@@ -306,6 +311,229 @@ class DinnerMembershipTerminationMySqlIT {
         assertThat(count(
                 "SELECT COUNT(*) FROM dinner_menu_selections WHERE user_id = ?", memberUserId))
                 .isZero();
+    }
+
+    @Test
+    @Timeout(30)
+    void accountDeletionSeesMemberCommittedWhileWaitingForHouseholdLock() throws Exception {
+        jdbcTemplate.update(
+                "DELETE FROM dinner_household_members WHERE id = ?", memberMembershipId);
+        String openid = "join-race-" + suffix;
+        jdbcTemplate.update(
+                "INSERT INTO wechat_user_identities (user_id, openid) VALUES (?, ?)",
+                ownerUserId,
+                openid);
+        CountDownLatch householdLocked = new CountDownLatch(1);
+        CountDownLatch candidateRead = new CountDownLatch(1);
+        Answer<?> realMemberMapperDelegate = Mockito.mockingDetails(memberMapper)
+                .getMockCreationSettings()
+                .getDefaultAnswer();
+        doAnswer(invocation -> {
+            Object result = realMemberMapperDelegate.answer(invocation);
+            candidateRead.countDown();
+            return result;
+        }).when(memberMapper).selectActiveByUserId(ownerUserId);
+
+        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+            Future<Void> joining = executor.submit(() -> {
+                transactionTemplate.executeWithoutResult(ignored -> {
+                    householdMapper.selectByIdForUpdate(householdId);
+                    householdLocked.countDown();
+                    try {
+                        assertThat(candidateRead.await(10, TimeUnit.SECONDS))
+                                .as("deletion established its pre-lock snapshot")
+                                .isTrue();
+                    } catch (InterruptedException exception) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException(exception);
+                    }
+                    memberMembershipId = insertMembership(memberUserId, "MEMBER", 2);
+                });
+                return null;
+            });
+            assertThat(householdLocked.await(10, TimeUnit.SECONDS))
+                    .as("joining transaction acquired the household lock")
+                    .isTrue();
+            Future<Void> deleting = executor.submit(() -> {
+                accountDeletionTransaction.deleteVerified(ownerUserId, openid);
+                return null;
+            });
+
+            joining.get(15, TimeUnit.SECONDS);
+            deleting.get(15, TimeUnit.SECONDS);
+        }
+
+        assertThat(count("SELECT COUNT(*) FROM dinner_households WHERE id = ?", householdId))
+                .isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT CONCAT(role, '|', status, '|', version) "
+                        + "FROM dinner_household_members "
+                        + "WHERE household_id = ? AND user_id = ?",
+                String.class,
+                householdId,
+                memberUserId)).isEqualTo("OWNER|ACTIVE|2");
+        assertThat(count(
+                "SELECT COUNT(*) FROM dinner_household_members "
+                        + "WHERE household_id = ? AND user_id = ?",
+                householdId,
+                ownerUserId)).isZero();
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT CONCAT(status, '|', username) FROM users WHERE id = ?",
+                String.class,
+                ownerUserId)).isEqualTo("DELETED|deleted_user_" + ownerUserId);
+        assertThat(count(
+                "SELECT COUNT(*) FROM dinner_recipes WHERE household_id = ?", householdId))
+                .isEqualTo(1);
+        assertThat(count(
+                "SELECT COUNT(*) FROM dinner_household_inventory WHERE household_id = ?",
+                householdId)).isEqualTo(1);
+    }
+
+    @Test
+    @Timeout(30)
+    void dissolutionSeesRecipeCommittedWhileWaitingForHouseholdLock() throws Exception {
+        String openid = "recipe-race-" + suffix;
+        jdbcTemplate.update(
+                "INSERT INTO wechat_user_identities (user_id, openid) VALUES (?, ?)",
+                ownerUserId,
+                openid);
+        String householdName = jdbcTemplate.queryForObject(
+                "SELECT name FROM dinner_households WHERE id = ?", String.class, householdId);
+        String key = UUID.randomUUID().toString();
+        String fingerprint = fingerprinter.fingerprint(
+                DinnerHouseholdDissolutionService.HOUSEHOLD_DISSOLUTION,
+                ownerMembershipId,
+                1L,
+                null,
+                null,
+                householdName);
+        var command = new DinnerHouseholdOperationService.HouseholdOperationCommand(
+                ownerUserId,
+                ownerMembershipId,
+                1L,
+                null,
+                null,
+                DinnerHouseholdDissolutionService.HOUSEHOLD_DISSOLUTION,
+                key,
+                fingerprint);
+        CountDownLatch householdLocked = new CountDownLatch(1);
+        CountDownLatch candidateRead = new CountDownLatch(1);
+        Answer<?> realMemberMapperDelegate = Mockito.mockingDetails(memberMapper)
+                .getMockCreationSettings()
+                .getDefaultAnswer();
+        doAnswer(invocation -> {
+            Object result = realMemberMapperDelegate.answer(invocation);
+            candidateRead.countDown();
+            return result;
+        }).when(memberMapper).selectActiveByUserId(ownerUserId);
+
+        Long newRecipeId;
+        HouseholdMutationResponse response;
+        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+            Future<Long> creatingRecipe = executor.submit(() ->
+                    transactionTemplate.execute(ignored -> {
+                        householdMapper.selectByIdForUpdate(householdId);
+                        householdLocked.countDown();
+                        try {
+                            assertThat(candidateRead.await(10, TimeUnit.SECONDS))
+                                    .as("dissolution established its pre-lock snapshot")
+                                    .isTrue();
+                        } catch (InterruptedException exception) {
+                            Thread.currentThread().interrupt();
+                            throw new IllegalStateException(exception);
+                        }
+                        return insertRacingMemberDraft(
+                                "recipe_race_" + suffix.substring(0, 8));
+                    }));
+            assertThat(householdLocked.await(10, TimeUnit.SECONDS))
+                    .as("recipe transaction acquired the household lock")
+                    .isTrue();
+            Future<HouseholdMutationResponse> dissolving = executor.submit(
+                    () -> dissolutionTransaction.dissolve(command, householdName, openid));
+
+            newRecipeId = creatingRecipe.get(15, TimeUnit.SECONDS);
+            response = dissolving.get(15, TimeUnit.SECONDS);
+        }
+
+        assertThat(response.actorHasHousehold()).isFalse();
+        assertThat(count("SELECT COUNT(*) FROM dinner_households WHERE id = ?", householdId))
+                .isZero();
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT CONCAT(COALESCE(household_id, 'NULL'), '|', status, '|', version) "
+                        + "FROM dinner_recipes WHERE id = ?",
+                String.class,
+                newRecipeId)).isEqualTo("NULL|DRAFT|2");
+        assertThat(count(
+                "SELECT COUNT(*) FROM dinner_household_operations "
+                        + "WHERE actor_id = ? AND idempotency_key = ?",
+                ownerUserId,
+                key)).isEqualTo(1);
+    }
+
+    @Test
+    @Timeout(30)
+    void crossedMembershipHistoriesDoNotDeadlockConcurrentAccountDeletion() throws Exception {
+        CrossHistoryDeletionFixture fixture = insertCrossHistoryDeletionFixture();
+        CyclicBarrier bothCurrentHouseholdsLocked = new CyclicBarrier(2);
+        Answer<?> realHouseholdMapperDelegate = Mockito.mockingDetails(householdMapper)
+                .getMockCreationSettings()
+                .getDefaultAnswer();
+        doAnswer(invocation -> {
+            Object result = realHouseholdMapperDelegate.answer(invocation);
+            Long lockedHouseholdId = invocation.getArgument(0);
+            if (List.of(fixture.firstHouseholdId(), fixture.secondHouseholdId())
+                    .contains(lockedHouseholdId)) {
+                bothCurrentHouseholdsLocked.await(10, TimeUnit.SECONDS);
+            }
+            return result;
+        }).when(householdMapper).selectByIdForUpdate(any());
+
+        List<Throwable> failures = new ArrayList<>();
+        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+            Future<Void> first = executor.submit(() -> {
+                accountDeletionTransaction.deleteVerified(
+                        fixture.firstActorUserId(), fixture.firstOpenid());
+                return null;
+            });
+            Future<Void> second = executor.submit(() -> {
+                accountDeletionTransaction.deleteVerified(
+                        fixture.secondActorUserId(), fixture.secondOpenid());
+                return null;
+            });
+            collectFailure(first, failures);
+            collectFailure(second, failures);
+            verify(memberMapper, times(2)).selectByIdsForUpdate(any());
+            assertThat(failures)
+                    .as("both crossed-history account deletions must commit without a deadlock")
+                    .isEmpty();
+            assertThat(count(
+                    "SELECT COUNT(*) FROM dinner_households WHERE id IN (?, ?)",
+                    fixture.firstHouseholdId(),
+                    fixture.secondHouseholdId())).isEqualTo(2);
+            assertThat(count(
+                    "SELECT COUNT(*) FROM dinner_household_members "
+                            + "WHERE household_id IN (?, ?) AND user_id IN (?, ?) "
+                            + "AND role = 'OWNER' AND status = 'ACTIVE'",
+                    fixture.firstHouseholdId(),
+                    fixture.secondHouseholdId(),
+                    fixture.firstSurvivorUserId(),
+                    fixture.secondSurvivorUserId())).isEqualTo(2);
+            assertThat(count(
+                    "SELECT COUNT(*) FROM dinner_household_members WHERE user_id IN (?, ?)",
+                    fixture.firstActorUserId(),
+                    fixture.secondActorUserId())).isZero();
+            assertThat(count(
+                    "SELECT COUNT(*) FROM wechat_user_identities WHERE user_id IN (?, ?)",
+                    fixture.firstActorUserId(),
+                    fixture.secondActorUserId())).isZero();
+            assertThat(count(
+                    "SELECT COUNT(*) FROM users WHERE id IN (?, ?) AND status = 'DELETED'",
+                    fixture.firstActorUserId(),
+                    fixture.secondActorUserId())).isEqualTo(2);
+        } finally {
+            reset(householdMapper, memberMapper);
+            deleteCrossHistoryDeletionFixture(fixture);
+        }
     }
 
     @Test
@@ -702,6 +930,123 @@ class DinnerMembershipTerminationMySqlIT {
                 userId);
     }
 
+    private CrossHistoryDeletionFixture insertCrossHistoryDeletionFixture() {
+        Long firstActorUserId = insertUser("cross_history_actor_u_" + suffix);
+        Long secondActorUserId = insertUser("cross_history_actor_v_" + suffix);
+        Long firstSurvivorUserId = insertUser("cross_history_survivor_h1_" + suffix);
+        Long secondSurvivorUserId = insertUser("cross_history_survivor_h2_" + suffix);
+        String firstOpenid = "cross-u-" + suffix;
+        String secondOpenid = "cross-v-" + suffix;
+        jdbcTemplate.update(
+                "INSERT INTO wechat_user_identities (user_id, openid) VALUES (?, ?), (?, ?)",
+                firstActorUserId,
+                firstOpenid,
+                secondActorUserId,
+                secondOpenid);
+
+        Long firstHouseholdId = insertHousehold(
+                "cross_history_h1_" + suffix, firstSurvivorUserId);
+        insertActiveMembership(firstHouseholdId, firstSurvivorUserId, "OWNER", 1);
+        insertActiveMembership(firstHouseholdId, firstActorUserId, "MEMBER", 2);
+        insertHistoricalMembership(
+                firstHouseholdId, secondActorUserId, firstSurvivorUserId);
+
+        Long secondHouseholdId = insertHousehold(
+                "cross_history_h2_" + suffix, secondSurvivorUserId);
+        insertActiveMembership(secondHouseholdId, secondSurvivorUserId, "OWNER", 1);
+        insertActiveMembership(secondHouseholdId, secondActorUserId, "MEMBER", 2);
+        insertHistoricalMembership(
+                secondHouseholdId, firstActorUserId, secondSurvivorUserId);
+
+        return new CrossHistoryDeletionFixture(
+                firstActorUserId,
+                secondActorUserId,
+                firstSurvivorUserId,
+                secondSurvivorUserId,
+                firstHouseholdId,
+                secondHouseholdId,
+                firstOpenid,
+                secondOpenid);
+    }
+
+    private Long insertHousehold(String name, Long createdBy) {
+        jdbcTemplate.update(
+                "INSERT INTO dinner_households (name, created_by) VALUES (?, ?)",
+                name,
+                createdBy);
+        return jdbcTemplate.queryForObject(
+                "SELECT id FROM dinner_households WHERE name = ? AND created_by = ?",
+                Long.class,
+                name,
+                createdBy);
+    }
+
+    private void insertActiveMembership(
+            Long targetHouseholdId,
+            Long userId,
+            String role,
+            int seatNo
+    ) {
+        jdbcTemplate.update(
+                "INSERT INTO dinner_household_members "
+                        + "(household_id, user_id, role, status, seat_no, "
+                        + "history_visible_from, version) "
+                        + "VALUES (?, ?, ?, 'ACTIVE', ?, UTC_TIMESTAMP(3), 1)",
+                targetHouseholdId,
+                userId,
+                role,
+                seatNo);
+    }
+
+    private void insertHistoricalMembership(
+            Long targetHouseholdId,
+            Long userId,
+            Long endedBy
+    ) {
+        jdbcTemplate.update(
+                "INSERT INTO dinner_household_members "
+                        + "(household_id, user_id, role, status, seat_no, joined_at, "
+                        + "history_visible_from, version, ended_at, ended_by, end_reason) "
+                        + "VALUES (?, ?, 'MEMBER', 'LEFT', 2, "
+                        + "UTC_TIMESTAMP(3) - INTERVAL 2 DAY, "
+                        + "UTC_TIMESTAMP(3) - INTERVAL 2 DAY, 2, "
+                        + "UTC_TIMESTAMP(3) - INTERVAL 1 DAY, ?, 'SELF_LEFT')",
+                targetHouseholdId,
+                userId,
+                endedBy);
+    }
+
+    private void deleteCrossHistoryDeletionFixture(CrossHistoryDeletionFixture fixture) {
+        requireDedicatedCatalogAtRuntime();
+        jdbcTemplate.update(
+                "DELETE FROM dinner_household_operations "
+                        + "WHERE household_id IN (?, ?) OR actor_id IN (?, ?)",
+                fixture.firstHouseholdId(),
+                fixture.secondHouseholdId(),
+                fixture.firstActorUserId(),
+                fixture.secondActorUserId());
+        jdbcTemplate.update(
+                "DELETE FROM dinner_household_members WHERE household_id IN (?, ?)",
+                fixture.firstHouseholdId(),
+                fixture.secondHouseholdId());
+        jdbcTemplate.update(
+                "DELETE FROM dinner_households WHERE id IN (?, ?)",
+                fixture.firstHouseholdId(),
+                fixture.secondHouseholdId());
+        jdbcTemplate.update(
+                "DELETE FROM wechat_user_identities WHERE user_id IN (?, ?, ?, ?)",
+                fixture.firstActorUserId(),
+                fixture.secondActorUserId(),
+                fixture.firstSurvivorUserId(),
+                fixture.secondSurvivorUserId());
+        jdbcTemplate.update(
+                "DELETE FROM users WHERE id IN (?, ?, ?, ?)",
+                fixture.firstActorUserId(),
+                fixture.secondActorUserId(),
+                fixture.firstSurvivorUserId(),
+                fixture.secondSurvivorUserId());
+    }
+
     private Long insertOpenInvite() {
         String hash = suffix + suffix;
         jdbcTemplate.update(
@@ -739,6 +1084,26 @@ class DinnerMembershipTerminationMySqlIT {
                         + "status, version) "
                         + "VALUES ('HOUSEHOLD', ?, ?, 'TEST', 'TEST', 2, 10, ?, ?, ?, "
                         + "'DRAFT', 3)",
+                householdId,
+                name,
+                memberUserId,
+                memberUserId,
+                systemSourceRecipeId);
+        return jdbcTemplate.queryForObject(
+                "SELECT id FROM dinner_recipes WHERE household_id = ? AND name = ?",
+                Long.class,
+                householdId,
+                name);
+    }
+
+    private Long insertRacingMemberDraft(String name) {
+        jdbcTemplate.update(
+                "INSERT INTO dinner_recipes "
+                        + "(scope, household_id, name, category, flavor, servings, "
+                        + "estimated_minutes, creator_id, last_modified_by, source_recipe_id, "
+                        + "status, version) "
+                        + "VALUES ('HOUSEHOLD', ?, ?, 'TEST', 'TEST', 2, 10, ?, ?, ?, "
+                        + "'DRAFT', 1)",
                 householdId,
                 name,
                 memberUserId,
@@ -813,6 +1178,33 @@ class DinnerMembershipTerminationMySqlIT {
             }
             throw exception;
         }
+    }
+
+    private void collectFailure(Future<Void> future, List<Throwable> failures)
+            throws InterruptedException {
+        try {
+            future.get(15, TimeUnit.SECONDS);
+        } catch (ExecutionException exception) {
+            Throwable failure = exception.getCause();
+            while (failure.getCause() != null && failure.getCause() != failure) {
+                failure = failure.getCause();
+            }
+            failures.add(failure);
+        } catch (TimeoutException exception) {
+            failures.add(exception);
+        }
+    }
+
+    private record CrossHistoryDeletionFixture(
+            Long firstActorUserId,
+            Long secondActorUserId,
+            Long firstSurvivorUserId,
+            Long secondSurvivorUserId,
+            Long firstHouseholdId,
+            Long secondHouseholdId,
+            String firstOpenid,
+            String secondOpenid
+    ) {
     }
 
     @TestConfiguration(proxyBeanMethods = false)

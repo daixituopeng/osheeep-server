@@ -2,6 +2,7 @@ package com.osheeep.server.dinner.household;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -26,6 +27,9 @@ import com.osheeep.server.dinner.menu.mapper.DinnerMenuActionMapper;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuMapper;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuSelectionMapper;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeEntity;
+import com.osheeep.server.dinner.recipe.entity.DinnerRecipeIngredientEntity;
+import com.osheeep.server.dinner.recipe.entity.DinnerRecipeMethodEntity;
+import com.osheeep.server.dinner.recipe.entity.DinnerRecipeMethodStepEntity;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeIngredientMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMethodMapper;
@@ -41,6 +45,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -72,7 +77,9 @@ class DinnerHouseholdDataPurgerTest {
         List.of(DinnerHouseholdEntity.class, DinnerHouseholdMemberEntity.class,
                         DinnerHouseholdOperationEntity.class, DinnerInviteCodeEntity.class,
                         DinnerMenuEntity.class, DinnerCookingRecordEntity.class,
-                        DinnerRecipeEntity.class, DinnerHouseholdInventoryEntity.class,
+                        DinnerRecipeEntity.class, DinnerRecipeMethodEntity.class,
+                        DinnerRecipeMethodStepEntity.class, DinnerRecipeIngredientEntity.class,
+                        DinnerHouseholdInventoryEntity.class,
                         DinnerIngredientEntity.class)
                 .forEach(type -> TableInfoHelper.initTableInfo(assistant, type));
     }
@@ -99,19 +106,19 @@ class DinnerHouseholdDataPurgerTest {
         draft.setStatus("DRAFT");
         draft.setVersion(3L);
 
-        when(operationMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of());
         when(inviteMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of());
         when(menuMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of());
         when(recordMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of());
-        when(recipeMapper.selectByHouseholdIdForUpdate(11L)).thenReturn(List.of(draft));
-        when(recipeMapper.selectLineageReferencesForUpdate(List.of(51L)))
-                .thenReturn(List.of());
+        when(recipeMapper.selectByHouseholdId(11L)).thenReturn(List.of(draft));
+        when(recipeMapper.selectList(any())).thenReturn(List.of());
+        when(recipeMapper.selectByIdsForUpdate(List.of(51L))).thenReturn(List.of(draft));
         when(methodMapper.selectByRecipeIdsForUpdate(List.of(51L))).thenReturn(List.of());
         when(recipeIngredientMapper.selectByRecipeIdsForUpdate(List.of(51L)))
                 .thenReturn(List.of());
         when(inventoryMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of());
         when(ingredientMapper.selectAllHouseholdIngredientsForUpdate(11L))
                 .thenReturn(List.of());
+        when(operationMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of());
         when(recipeMapper.detachOwnedDraft(51L, 11L, 7L, 3L, null)).thenReturn(1);
         when(householdMapper.deleteById(11L)).thenReturn(1);
 
@@ -123,5 +130,130 @@ class DinnerHouseholdDataPurgerTest {
                 .singleElement()
                 .satisfies(constructor -> assertThat(constructor.getParameterTypes())
                         .doesNotContain(DinnerImageAssetMapper.class));
+    }
+
+    @Test
+    void locksOperationsOnlyAfterInviteAndBusinessSubresources() {
+        DinnerHouseholdMemberEntity owner = new DinnerHouseholdMemberEntity();
+        owner.setId(31L);
+        owner.setHouseholdId(11L);
+        DinnerRecipeEntity recipe = recipe(51L, 11L, "HOUSEHOLD", "PUBLISHED");
+        DinnerRecipeMethodEntity method = new DinnerRecipeMethodEntity();
+        method.setId(61L);
+        method.setRecipeId(51L);
+        DinnerRecipeMethodStepEntity step = new DinnerRecipeMethodStepEntity();
+        step.setId(71L);
+        step.setMethodId(61L);
+        DinnerRecipeIngredientEntity recipeIngredient = new DinnerRecipeIngredientEntity();
+        recipeIngredient.setId(81L);
+        recipeIngredient.setRecipeId(51L);
+
+        when(inviteMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of());
+        when(menuMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of());
+        when(recordMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of());
+        when(recipeMapper.selectByHouseholdId(11L)).thenReturn(List.of(recipe));
+        when(recipeMapper.selectList(any())).thenReturn(List.of());
+        when(recipeMapper.selectByIdsForUpdate(List.of(51L))).thenReturn(List.of(recipe));
+        when(methodMapper.selectByRecipeIdsForUpdate(List.of(51L))).thenReturn(List.of(method));
+        when(stepMapper.selectByMethodIdsForUpdate(List.of(61L))).thenReturn(List.of(step));
+        when(recipeIngredientMapper.selectByRecipeIdsForUpdate(List.of(51L)))
+                .thenReturn(List.of(recipeIngredient));
+        when(inventoryMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of());
+        when(ingredientMapper.selectAllHouseholdIngredientsForUpdate(11L))
+                .thenReturn(List.of());
+        when(operationMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of());
+        when(householdMapper.deleteById(11L)).thenReturn(1);
+
+        purger.purgeHousehold(11L, List.of(owner), Set.of());
+
+        InOrder lockOrder = inOrder(
+                inviteMapper,
+                menuMapper,
+                recordMapper,
+                recipeMapper,
+                methodMapper,
+                stepMapper,
+                recipeIngredientMapper,
+                inventoryMapper,
+                ingredientMapper,
+                operationMapper);
+        lockOrder.verify(inviteMapper).selectAllByHouseholdIdForUpdate(11L);
+        lockOrder.verify(menuMapper).selectAllByHouseholdIdForUpdate(11L);
+        lockOrder.verify(recordMapper).selectAllByHouseholdIdForUpdate(11L);
+        lockOrder.verify(recipeMapper).selectByHouseholdId(11L);
+        lockOrder.verify(recipeMapper).selectList(any());
+        lockOrder.verify(recipeMapper).selectByIdsForUpdate(List.of(51L));
+        lockOrder.verify(methodMapper).selectByRecipeIdsForUpdate(List.of(51L));
+        lockOrder.verify(stepMapper).selectByMethodIdsForUpdate(List.of(61L));
+        lockOrder.verify(recipeIngredientMapper).selectByRecipeIdsForUpdate(List.of(51L));
+        lockOrder.verify(inventoryMapper).selectAllByHouseholdIdForUpdate(11L);
+        lockOrder.verify(ingredientMapper).selectAllHouseholdIngredientsForUpdate(11L);
+        lockOrder.verify(operationMapper).selectAllByHouseholdIdForUpdate(11L);
+    }
+
+    @Test
+    void collectsEveryRelatedRecipeIdWithoutLocksThenTakesOneSortedRecipeLock() {
+        DinnerHouseholdMemberEntity owner = new DinnerHouseholdMemberEntity();
+        owner.setId(31L);
+        owner.setHouseholdId(11L);
+
+        DinnerRecipeEntity externalSource = recipe(10L, null, "SYSTEM", "PUBLISHED");
+        DinnerRecipeEntity laterHouseholdRecipe =
+                recipe(50L, 11L, "HOUSEHOLD", "PUBLISHED");
+        laterHouseholdRecipe.setSourceRecipeId(10L);
+        DinnerRecipeEntity earlierHouseholdRecipe =
+                recipe(30L, 11L, "HOUSEHOLD", "PUBLISHED");
+        earlierHouseholdRecipe.setSourceRecipeId(10L);
+        earlierHouseholdRecipe.setRevisionOfRecipeId(50L);
+        DinnerRecipeEntity lineageReference =
+                recipe(70L, 22L, "HOUSEHOLD", "DRAFT");
+        lineageReference.setSourceRecipeId(30L);
+
+        when(inviteMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of());
+        when(menuMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of());
+        when(recordMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of());
+        when(recipeMapper.selectByHouseholdId(11L))
+                .thenReturn(List.of(laterHouseholdRecipe, earlierHouseholdRecipe));
+        when(recipeMapper.selectList(any()))
+                .thenReturn(List.of(lineageReference, earlierHouseholdRecipe));
+        when(recipeMapper.selectByIdsForUpdate(List.of(10L, 30L, 50L, 70L)))
+                .thenReturn(List.of(
+                        externalSource,
+                        earlierHouseholdRecipe,
+                        laterHouseholdRecipe,
+                        lineageReference));
+        when(methodMapper.selectByRecipeIdsForUpdate(List.of(30L, 50L)))
+                .thenReturn(List.of());
+        when(recipeIngredientMapper.selectByRecipeIdsForUpdate(List.of(30L, 50L)))
+                .thenReturn(List.of());
+        when(inventoryMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of());
+        when(ingredientMapper.selectAllHouseholdIngredientsForUpdate(11L))
+                .thenReturn(List.of());
+        when(operationMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of());
+        when(householdMapper.deleteById(11L)).thenReturn(1);
+
+        purger.purgeHousehold(11L, List.of(owner), Set.of());
+
+        InOrder recipeLockOrder = inOrder(recipeMapper);
+        recipeLockOrder.verify(recipeMapper).selectByHouseholdId(11L);
+        recipeLockOrder.verify(recipeMapper).selectList(any());
+        recipeLockOrder.verify(recipeMapper)
+                .selectByIdsForUpdate(List.of(10L, 30L, 50L, 70L));
+        verify(recipeMapper, never()).selectByHouseholdIdForUpdate(any());
+        verify(recipeMapper, never()).selectLineageReferencesForUpdate(any());
+    }
+
+    private DinnerRecipeEntity recipe(
+            Long id,
+            Long householdId,
+            String scope,
+            String status
+    ) {
+        DinnerRecipeEntity recipe = new DinnerRecipeEntity();
+        recipe.setId(id);
+        recipe.setHouseholdId(householdId);
+        recipe.setScope(scope);
+        recipe.setStatus(status);
+        return recipe;
     }
 }

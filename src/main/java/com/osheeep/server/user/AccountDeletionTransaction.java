@@ -13,6 +13,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.Objects;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -48,7 +49,7 @@ public class AccountDeletionTransaction {
         this.clock = clock;
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public void deleteVerified(Long userId, String openid) {
         UserEntity user = userMapper.selectByIdForUpdate(userId);
         if (!userService.isActive(user)) {

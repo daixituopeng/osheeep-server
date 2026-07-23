@@ -81,9 +81,8 @@ class DinnerAccountCleanupServiceTest {
                 householdMapper, memberMapper, operationMapper, inviteMapper,
                 menuMapper, selectionMapper, recipeMapper, recipeIngredientMapper,
                 methodMapper, stepMapper, inventoryMapper, ingredientMapper, dataPurger);
-        lenient().when(recipeMapper.selectAllDraftsByCreatorForUpdate(7L))
-                .thenReturn(List.of());
-        lenient().when(memberMapper.selectAllByUserIdForUpdate(7L)).thenReturn(List.of());
+        lenient().when(recipeMapper.selectList(any())).thenReturn(List.of());
+        lenient().when(memberMapper.selectIdsByUserId(7L)).thenReturn(List.of());
         lenient().when(operationMapper.selectByActorOrTargetMembershipIdsForUpdate(
                 eq(7L), any()))
                 .thenReturn(List.of());
@@ -94,7 +93,9 @@ class DinnerAccountCleanupServiceTest {
         DinnerHouseholdMemberEntity owner = membership(31L, 7L, "OWNER");
         when(memberMapper.selectActiveByUserId(7L)).thenReturn(owner);
         when(householdMapper.selectByIdForUpdate(11L)).thenReturn(household());
-        when(memberMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of(owner));
+        when(memberMapper.selectIdsByUserId(7L)).thenReturn(List.of(31L));
+        when(memberMapper.selectIdsByHouseholdId(11L)).thenReturn(List.of(31L));
+        when(memberMapper.selectByIdsForUpdate(List.of(31L))).thenReturn(List.of(owner));
 
         service.removeUser(7L, DELETED_AT);
 
@@ -105,24 +106,34 @@ class DinnerAccountCleanupServiceTest {
 
     @Test
     void memberDeletionPreservesSharedHouseholdAndAdvancesMembershipOnce() {
+        DinnerHouseholdMemberEntity historical = membership(9L, 7L, "MEMBER");
+        historical.setHouseholdId(22L);
+        historical.setStatus("LEFT");
         DinnerHouseholdMemberEntity owner = membership(31L, 8L, "OWNER");
         DinnerHouseholdMemberEntity member = membership(32L, 7L, "MEMBER");
         when(memberMapper.selectActiveByUserId(7L)).thenReturn(member);
         when(householdMapper.selectByIdForUpdate(11L)).thenReturn(household());
-        when(memberMapper.selectAllByHouseholdIdForUpdate(11L))
-                .thenReturn(List.of(owner, member));
+        when(memberMapper.selectIdsByUserId(7L)).thenReturn(List.of(9L, 32L));
+        when(memberMapper.selectIdsByHouseholdId(11L)).thenReturn(List.of(31L, 32L));
+        when(memberMapper.selectByIdsForUpdate(List.of(9L, 31L, 32L)))
+                .thenReturn(List.of(historical, owner, member));
         when(inviteMapper.selectAllOpenByHouseholdIdForUpdate(11L)).thenReturn(List.of());
         when(menuMapper.selectUncompletedByHouseholdIdForUpdate(11L)).thenReturn(List.of());
         when(inventoryMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of());
         when(ingredientMapper.selectAllHouseholdIngredientsForUpdate(11L))
                 .thenReturn(List.of());
         when(memberMapper.deleteBatchIds(List.of(32L))).thenReturn(1);
+        when(memberMapper.deleteBatchIds(List.of(9L))).thenReturn(1);
         when(householdMapper.advanceMembershipAndInviteRevision(11L, 8L, 4L))
                 .thenReturn(1);
 
         service.removeUser(7L, DELETED_AT);
 
         verify(memberMapper).deleteBatchIds(List.of(32L));
+        verify(memberMapper).selectByIdsForUpdate(List.of(9L, 31L, 32L));
+        verify(operationMapper).selectByActorOrTargetMembershipIdsForUpdate(
+                7L, List.of(9L, 32L));
+        verify(memberMapper).deleteBatchIds(List.of(9L));
         verify(memberMapper, never()).promoteActiveMember(any(), any(), any(), any());
         verify(householdMapper).advanceMembershipAndInviteRevision(11L, 8L, 4L);
         verifyNoInteractions(dataPurger);
@@ -135,7 +146,9 @@ class DinnerAccountCleanupServiceTest {
         survivor.setVersion(3L);
         when(memberMapper.selectActiveByUserId(7L)).thenReturn(owner);
         when(householdMapper.selectByIdForUpdate(11L)).thenReturn(household());
-        when(memberMapper.selectAllByHouseholdIdForUpdate(11L))
+        when(memberMapper.selectIdsByUserId(7L)).thenReturn(List.of(31L));
+        when(memberMapper.selectIdsByHouseholdId(11L)).thenReturn(List.of(31L, 32L));
+        when(memberMapper.selectByIdsForUpdate(List.of(31L, 32L)))
                 .thenReturn(List.of(owner, survivor));
         when(inviteMapper.selectAllOpenByHouseholdIdForUpdate(11L)).thenReturn(List.of());
         when(menuMapper.selectUncompletedByHouseholdIdForUpdate(11L)).thenReturn(List.of());
@@ -169,17 +182,17 @@ class DinnerAccountCleanupServiceTest {
         draft.setScope("HOUSEHOLD");
         draft.setStatus("DRAFT");
         draft.setCreatorId(7L);
-        when(recipeMapper.selectAllDraftsByCreatorForUpdate(7L))
-                .thenReturn(List.of(draft));
-        when(recipeMapper.selectLineageReferencesForUpdate(List.of(51L)))
-                .thenReturn(List.of());
+        when(recipeMapper.selectList(any()))
+                .thenReturn(List.of(draft), List.of());
+        when(recipeMapper.selectByIdsForUpdate(List.of(51L))).thenReturn(List.of(draft));
         when(methodMapper.selectByRecipeIdsForUpdate(List.of(51L))).thenReturn(List.of());
         when(recipeIngredientMapper.selectByRecipeIdsForUpdate(List.of(51L)))
                 .thenReturn(List.of());
         when(recipeMapper.deleteBatchIds(List.of(51L))).thenReturn(1);
         DinnerHouseholdMemberEntity left = membership(30L, 7L, "MEMBER");
         left.setStatus("LEFT");
-        when(memberMapper.selectAllByUserIdForUpdate(7L)).thenReturn(List.of(left));
+        when(memberMapper.selectIdsByUserId(7L)).thenReturn(List.of(30L));
+        when(memberMapper.selectByIdsForUpdate(List.of(30L))).thenReturn(List.of(left));
         when(memberMapper.deleteBatchIds(List.of(30L))).thenReturn(1);
 
         service.removeUser(7L, DELETED_AT);
@@ -189,6 +202,46 @@ class DinnerAccountCleanupServiceTest {
                 7L, List.of(30L));
         verify(memberMapper).deleteBatchIds(List.of(30L));
         verifyNoInteractions(dataPurger);
+    }
+
+    @Test
+    void privateDraftCleanupLocksCreatorAndLineageRecipesOnceInGlobalIdOrder() {
+        DinnerRecipeEntity draft = new DinnerRecipeEntity();
+        draft.setId(51L);
+        draft.setScope("HOUSEHOLD");
+        draft.setStatus("DRAFT");
+        draft.setCreatorId(7L);
+        DinnerRecipeEntity lineageReference = new DinnerRecipeEntity();
+        lineageReference.setId(9L);
+        lineageReference.setScope("HOUSEHOLD");
+        lineageReference.setStatus("PUBLISHED");
+        lineageReference.setCreatorId(8L);
+        lineageReference.setSourceRecipeId(51L);
+        DinnerRecipeMethodEntity method = new DinnerRecipeMethodEntity();
+        method.setId(61L);
+        method.setRecipeId(51L);
+        when(recipeMapper.selectList(any()))
+                .thenReturn(List.of(draft), List.of(lineageReference));
+        when(recipeMapper.selectByIdsForUpdate(List.of(9L, 51L)))
+                .thenReturn(List.of(lineageReference, draft));
+        when(methodMapper.selectByRecipeIdsForUpdate(List.of(51L))).thenReturn(List.of(method));
+        when(stepMapper.selectByMethodIdsForUpdate(List.of(61L))).thenReturn(List.of());
+        when(recipeIngredientMapper.selectByRecipeIdsForUpdate(List.of(51L)))
+                .thenReturn(List.of());
+        when(recipeMapper.deleteBatchIds(List.of(51L))).thenReturn(1);
+
+        service.removeUser(7L, DELETED_AT);
+
+        org.mockito.InOrder lockOrder = org.mockito.Mockito.inOrder(
+                recipeMapper, methodMapper, stepMapper, recipeIngredientMapper);
+        lockOrder.verify(recipeMapper, org.mockito.Mockito.times(2)).selectList(any());
+        lockOrder.verify(recipeMapper).selectByIdsForUpdate(List.of(9L, 51L));
+        lockOrder.verify(methodMapper).selectByRecipeIdsForUpdate(List.of(51L));
+        lockOrder.verify(stepMapper).selectByMethodIdsForUpdate(List.of(61L));
+        lockOrder.verify(recipeIngredientMapper).selectByRecipeIdsForUpdate(List.of(51L));
+        verify(recipeMapper, never()).selectAllDraftsByCreatorForUpdate(any());
+        verify(recipeMapper, never()).selectLineageReferencesForUpdate(any());
+        verify(recipeMapper).deleteBatchIds(List.of(51L));
     }
 
     @Test

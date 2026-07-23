@@ -284,7 +284,7 @@ The body replaces the single default method and all its steps in request order. 
 
 A recipe aggregate response contains `id`, `status`, `version`, nullable basic fields, `ingredients`, nullable `defaultMethod`, nullable `image`, `incompleteSteps`, and ISO-8601 `updatedAt`. Ingredient items contain `ingredientId`, `name`, nullable `quantity`, `unit`, `required`, and zero-based `sortOrder`. The default method contains `id`, `name`, `cookingStyle`, and ordered `{instruction, sortOrder}` items.
 
-Family list items contain `id`, `status`, nullable `name` and `imageUrl`, basic fields, `version`, creator and last-modifier IDs/names, `completedStep`, and `updatedAt`. List order is `updatedAt` descending, then recipe ID descending.
+Family list items contain `id`, `status`, nullable `name` and `imageUrl`, basic fields, `version`, privacy-safe `creator` and `lastModifier` actors shaped as `{kind}`, `completedStep`, and `updatedAt`. Actor `kind` uses the household relation values defined below (`ME`, current `PARTNER`, `EXITED_MEMBER`, or `DELETED_MEMBER`); creator or modifier IDs and names are never returned. List order is `updatedAt` descending, then recipe ID descending.
 
 Image search returns only `APPROVED` assets. A response item exposes:
 

@@ -1,7 +1,7 @@
 package com.osheeep.server.dinner.household;
 
-import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.osheeep.server.common.error.BusinessException;
 import com.osheeep.server.common.error.ErrorCode;
 import com.osheeep.server.dinner.household.entity.DinnerHouseholdEntity;
@@ -32,6 +32,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeSet;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -89,34 +90,46 @@ public class DinnerAccountCleanupService {
         requirePositive(userId, "User id");
         Objects.requireNonNull(deletedAt, "Deletion time is required");
 
-        Set<Long> knownMembershipIds = new HashSet<>();
+        Set<Long> deletedMembershipIds = new HashSet<>();
+        LockedMembershipSnapshot lockedMemberships = null;
         DinnerHouseholdMemberEntity candidate = memberMapper.selectActiveByUserId(userId);
         if (isCandidate(candidate, userId)) {
             DinnerHouseholdEntity household =
                     householdMapper.selectByIdForUpdate(candidate.getHouseholdId());
             if (household != null) {
+                lockedMemberships = lockRelevantMemberships(userId, household.getId());
                 List<DinnerHouseholdMemberEntity> memberships =
-                        requireList(memberMapper.selectAllByHouseholdIdForUpdate(
-                                household.getId()));
-                memberships.stream()
-                        .filter(member -> Objects.equals(userId, member.getUserId()))
-                        .map(DinnerHouseholdMemberEntity::getId)
-                        .filter(Objects::nonNull)
-                        .forEach(knownMembershipIds::add);
+                        lockedMemberships.householdMemberships();
                 List<DinnerHouseholdMemberEntity> activeMembers =
                         validateCurrentHousehold(userId, candidate, household, memberships);
                 if (activeMembers.size() == 1) {
                     dataPurger.purgeHousehold(
                             household.getId(), memberships, Set.of(userId));
+                    memberships.stream()
+                            .filter(member -> Objects.equals(userId, member.getUserId()))
+                            .map(DinnerHouseholdMemberEntity::getId)
+                            .forEach(deletedMembershipIds::add);
                 } else {
                     removeFromSurvivingHousehold(
-                            userId, deletedAt, household, memberships, activeMembers);
+                            userId,
+                            deletedAt,
+                            household,
+                            memberships,
+                            activeMembers,
+                            deletedMembershipIds);
                 }
             }
         }
+        if (lockedMemberships == null) {
+            lockedMemberships = lockRelevantMemberships(userId, null);
+        }
 
         purgePrivateDrafts(userId);
-        purgeHistoricalMembershipAndOperationData(userId, knownMembershipIds);
+        purgeHistoricalMembershipAndOperationData(
+                userId,
+                lockedMemberships.actorMembershipIds(),
+                lockedMemberships.actorMemberships(),
+                deletedMembershipIds);
         revokeRemainingOpenInvites(userId, deletedAt);
     }
 
@@ -125,7 +138,8 @@ public class DinnerAccountCleanupService {
             LocalDateTime deletedAt,
             DinnerHouseholdEntity household,
             List<DinnerHouseholdMemberEntity> memberships,
-            List<DinnerHouseholdMemberEntity> activeMembers
+            List<DinnerHouseholdMemberEntity> activeMembers,
+            Set<Long> deletedMembershipIds
     ) {
         Long householdId = household.getId();
         DinnerHouseholdMemberEntity actorMembership = activeMembers.stream()
@@ -184,6 +198,7 @@ public class DinnerAccountCleanupService {
                 && memberMapper.deleteBatchIds(actorMembershipIds) != actorMembershipIds.size()) {
             throw householdVersionConflict();
         }
+        deletedMembershipIds.addAll(actorMembershipIds);
         if (OWNER.equals(actorMembership.getRole())) {
             if (memberMapper.promoteActiveMember(
                     survivor.getId(), householdId, survivor.getUserId(), survivor.getVersion())
@@ -228,14 +243,18 @@ public class DinnerAccountCleanupService {
     }
 
     private LockedPrivateDrafts lockPrivateDrafts(Long userId) {
-        List<DinnerRecipeEntity> drafts = requireList(
-                recipeMapper.selectAllDraftsByCreatorForUpdate(userId));
-        if (drafts.isEmpty()) {
+        List<DinnerRecipeEntity> discoveredDrafts = requireList(recipeMapper.selectList(
+                Wrappers.<DinnerRecipeEntity>lambdaQuery()
+                        .eq(DinnerRecipeEntity::getCreatorId, userId)
+                        .eq(DinnerRecipeEntity::getScope, "HOUSEHOLD")
+                        .eq(DinnerRecipeEntity::getStatus, "DRAFT")
+                        .orderByAsc(DinnerRecipeEntity::getId)));
+        if (discoveredDrafts.isEmpty()) {
             return new LockedPrivateDrafts(List.of(), List.of());
         }
         Long previousId = null;
-        List<Long> draftIds = new ArrayList<>();
-        for (DinnerRecipeEntity draft : drafts) {
+        TreeSet<Long> draftIdSet = new TreeSet<>();
+        for (DinnerRecipeEntity draft : discoveredDrafts) {
             if (draft == null || draft.getId() == null
                     || !Objects.equals(userId, draft.getCreatorId())
                     || !"HOUSEHOLD".equals(draft.getScope())
@@ -243,11 +262,54 @@ public class DinnerAccountCleanupService {
                     || previousId != null && draft.getId() <= previousId) {
                 throw householdVersionConflict();
             }
-            draftIds.add(draft.getId());
+            draftIdSet.add(draft.getId());
             previousId = draft.getId();
         }
 
-        requireList(recipeMapper.selectLineageReferencesForUpdate(draftIds));
+        List<Long> discoveredDraftIds = List.copyOf(draftIdSet);
+        List<DinnerRecipeEntity> discoveredLineageReferences =
+                requireList(recipeMapper.selectList(
+                        Wrappers.<DinnerRecipeEntity>lambdaQuery()
+                                .in(DinnerRecipeEntity::getSourceRecipeId, discoveredDraftIds)
+                                .or()
+                                .in(DinnerRecipeEntity::getRevisionOfRecipeId,
+                                        discoveredDraftIds)
+                                .orderByAsc(DinnerRecipeEntity::getId)));
+        TreeSet<Long> recipeIdsToLock = new TreeSet<>(draftIdSet);
+        previousId = null;
+        for (DinnerRecipeEntity reference : discoveredLineageReferences) {
+            if (reference == null || reference.getId() == null
+                    || previousId != null && reference.getId() <= previousId
+                    || !draftIdSet.contains(reference.getSourceRecipeId())
+                    && !draftIdSet.contains(reference.getRevisionOfRecipeId())) {
+                throw householdVersionConflict();
+            }
+            recipeIdsToLock.add(reference.getId());
+            previousId = reference.getId();
+        }
+
+        List<DinnerRecipeEntity> lockedRecipes = requireList(
+                recipeMapper.selectByIdsForUpdate(List.copyOf(recipeIdsToLock)));
+        previousId = null;
+        List<Long> draftIds = new ArrayList<>();
+        for (DinnerRecipeEntity recipe : lockedRecipes) {
+            if (recipe == null || recipe.getId() == null
+                    || !recipeIdsToLock.contains(recipe.getId())
+                    || previousId != null && recipe.getId() <= previousId) {
+                throw householdVersionConflict();
+            }
+            if (draftIdSet.contains(recipe.getId())
+                    && Objects.equals(userId, recipe.getCreatorId())
+                    && "HOUSEHOLD".equals(recipe.getScope())
+                    && "DRAFT".equals(recipe.getStatus())) {
+                draftIds.add(recipe.getId());
+            }
+            previousId = recipe.getId();
+        }
+        if (draftIds.isEmpty()) {
+            return new LockedPrivateDrafts(List.of(), List.of());
+        }
+
         List<DinnerRecipeMethodEntity> methods = requireList(
                 methodMapper.selectByRecipeIdsForUpdate(draftIds));
         List<Long> methodIds = methods.stream()
@@ -289,18 +351,17 @@ public class DinnerAccountCleanupService {
 
     private void purgeHistoricalMembershipAndOperationData(
             Long userId,
-            Set<Long> knownMembershipIds
+            List<Long> actorMembershipIds,
+            List<DinnerHouseholdMemberEntity> lockedActorMemberships,
+            Set<Long> deletedMembershipIds
     ) {
-        List<DinnerHouseholdMemberEntity> remainingMemberships = requireList(
-                memberMapper.selectAllByUserIdForUpdate(userId));
-        for (DinnerHouseholdMemberEntity membership : remainingMemberships) {
+        for (DinnerHouseholdMemberEntity membership : lockedActorMemberships) {
             if (membership == null || membership.getId() == null
                     || !Objects.equals(userId, membership.getUserId())) {
                 throw householdVersionConflict();
             }
-            knownMembershipIds.add(membership.getId());
         }
-        List<Long> membershipIds = knownMembershipIds.stream().sorted().toList();
+        List<Long> membershipIds = actorMembershipIds.stream().sorted().toList();
         requireList(operationMapper.selectByActorOrTargetMembershipIdsForUpdate(
                 userId, membershipIds));
         LambdaQueryWrapper<DinnerHouseholdOperationEntity> operationDelete =
@@ -311,14 +372,71 @@ public class DinnerAccountCleanupService {
                     DinnerHouseholdOperationEntity::getTargetMemberId, membershipIds);
         }
         operationMapper.delete(operationDelete);
-        if (!remainingMemberships.isEmpty()) {
-            List<Long> remainingIds = remainingMemberships.stream()
-                    .map(DinnerHouseholdMemberEntity::getId)
-                    .toList();
+        List<Long> remainingIds = lockedActorMemberships.stream()
+                .map(DinnerHouseholdMemberEntity::getId)
+                .filter(membershipId -> !deletedMembershipIds.contains(membershipId))
+                .toList();
+        if (!remainingIds.isEmpty()) {
             if (memberMapper.deleteBatchIds(remainingIds) != remainingIds.size()) {
                 throw householdVersionConflict();
             }
         }
+    }
+
+    private LockedMembershipSnapshot lockRelevantMemberships(
+            Long userId,
+            Long householdId
+    ) {
+        List<Long> actorMembershipIds = validateMembershipIds(
+                memberMapper.selectIdsByUserId(userId));
+        List<Long> householdMembershipIds = householdId == null
+                ? List.of()
+                : validateMembershipIds(memberMapper.selectIdsByHouseholdId(householdId));
+        Set<Long> relatedMembershipIds = new HashSet<>(actorMembershipIds);
+        relatedMembershipIds.addAll(householdMembershipIds);
+        List<Long> sortedMembershipIds = relatedMembershipIds.stream().sorted().toList();
+        List<DinnerHouseholdMemberEntity> locked = sortedMembershipIds.isEmpty()
+                ? List.of()
+                : requireList(memberMapper.selectByIdsForUpdate(sortedMembershipIds));
+        Set<Long> actorMembershipIdSet = new HashSet<>(actorMembershipIds);
+        Set<Long> householdMembershipIdSet = new HashSet<>(householdMembershipIds);
+        Long previousId = null;
+        for (DinnerHouseholdMemberEntity membership : locked) {
+            if (membership == null
+                    || membership.getId() == null
+                    || !relatedMembershipIds.contains(membership.getId())
+                    || previousId != null && membership.getId() <= previousId
+                    || actorMembershipIdSet.contains(membership.getId())
+                    && !Objects.equals(userId, membership.getUserId())
+                    || householdId != null
+                    && householdMembershipIdSet.contains(membership.getId())
+                    && !Objects.equals(householdId, membership.getHouseholdId())) {
+                throw householdVersionConflict();
+            }
+            previousId = membership.getId();
+        }
+
+        List<DinnerHouseholdMemberEntity> actorMemberships = locked.stream()
+                .filter(membership -> actorMembershipIdSet.contains(membership.getId()))
+                .toList();
+        List<DinnerHouseholdMemberEntity> householdMemberships = householdId == null
+                ? List.of()
+                : locked.stream()
+                        .filter(membership ->
+                                householdMembershipIdSet.contains(membership.getId()))
+                        .toList();
+        return new LockedMembershipSnapshot(
+                List.copyOf(actorMembershipIds),
+                List.copyOf(actorMemberships),
+                List.copyOf(householdMemberships));
+    }
+
+    private List<Long> validateMembershipIds(List<Long> membershipIds) {
+        if (membershipIds == null
+                || membershipIds.stream().anyMatch(id -> id == null || id < 1)) {
+            throw householdVersionConflict();
+        }
+        return List.copyOf(membershipIds);
     }
 
     private void revokeRemainingOpenInvites(Long userId, LocalDateTime deletedAt) {
@@ -421,5 +539,12 @@ public class DinnerAccountCleanupService {
     }
 
     private record LockedPrivateDrafts(List<Long> draftIds, List<Long> methodIds) {
+    }
+
+    private record LockedMembershipSnapshot(
+            List<Long> actorMembershipIds,
+            List<DinnerHouseholdMemberEntity> actorMemberships,
+            List<DinnerHouseholdMemberEntity> householdMemberships
+    ) {
     }
 }

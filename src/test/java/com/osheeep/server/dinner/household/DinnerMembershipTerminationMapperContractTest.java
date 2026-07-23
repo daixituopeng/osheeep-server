@@ -12,8 +12,11 @@ import com.osheeep.server.dinner.menu.mapper.DinnerMenuMapper;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuSelectionMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeIngredientMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMapper;
+import com.osheeep.server.user.AccountDeletionTransaction;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 
 class DinnerMembershipTerminationMapperContractTest {
 
@@ -44,6 +47,12 @@ class DinnerMembershipTerminationMapperContractTest {
                 "demoteActiveOwner");
         assertStatement(configuration, DinnerHouseholdMemberMapper.class,
                 "promoteActiveMember");
+        assertStatement(configuration, DinnerHouseholdMemberMapper.class,
+                "selectIdsByHouseholdId");
+        assertStatement(configuration, DinnerHouseholdMemberMapper.class,
+                "selectIdsByUserId");
+        assertStatement(configuration, DinnerHouseholdMemberMapper.class,
+                "selectByIdsForUpdate");
         assertStatement(configuration, DinnerMenuMapper.class,
                 "selectUncompletedByHouseholdIdForUpdate");
         assertStatement(configuration, DinnerMenuMapper.class,
@@ -64,6 +73,25 @@ class DinnerMembershipTerminationMapperContractTest {
                 "selectAllByHouseholdIdForUpdate");
         assertStatement(configuration, DinnerIngredientMapper.class,
                 "selectAllHouseholdIngredientsForUpdate");
+    }
+
+    @Test
+    void destructiveDiscoveryTransactionsUseReadCommitted() throws NoSuchMethodException {
+        Transactional deletion = AccountDeletionTransaction.class
+                .getMethod("deleteVerified", Long.class, String.class)
+                .getAnnotation(Transactional.class);
+        Transactional dissolution = DinnerHouseholdDissolutionTransaction.class
+                .getMethod(
+                        "dissolve",
+                        DinnerHouseholdOperationService.HouseholdOperationCommand.class,
+                        String.class,
+                        String.class)
+                .getAnnotation(Transactional.class);
+
+        assertThat(deletion).isNotNull();
+        assertThat(deletion.isolation()).isEqualTo(Isolation.READ_COMMITTED);
+        assertThat(dissolution).isNotNull();
+        assertThat(dissolution.isolation()).isEqualTo(Isolation.READ_COMMITTED);
     }
 
     private void assertStatement(
