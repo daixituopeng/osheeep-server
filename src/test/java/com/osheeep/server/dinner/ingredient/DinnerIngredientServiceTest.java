@@ -359,6 +359,7 @@ class DinnerIngredientServiceTest {
         item.setId(21L);
         stubLockedAccess(7L, 11L);
         when(inventoryMapper.selectByHouseholdAndIngredientForUpdate(11L, 3L)).thenReturn(item);
+        when(inventoryMapper.delete(any())).thenReturn(1);
 
         service.removeInventoryItem(7L, 3L, 2L);
 

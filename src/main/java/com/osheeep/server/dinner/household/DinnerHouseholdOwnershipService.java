@@ -11,6 +11,9 @@ import com.osheeep.server.dinner.household.entity.DinnerHouseholdOperationEntity
 import com.osheeep.server.dinner.household.mapper.DinnerHouseholdMapper;
 import com.osheeep.server.dinner.household.mapper.DinnerHouseholdMemberMapper;
 import com.osheeep.server.dinner.household.mapper.DinnerHouseholdOperationMapper;
+import com.osheeep.server.dinner.notification.DinnerNotificationPublisher;
+import com.osheeep.server.dinner.notification.DinnerNotificationReferenceType;
+import com.osheeep.server.dinner.notification.DinnerNotificationType;
 import com.osheeep.server.user.UserMapper;
 import com.osheeep.server.user.entity.UserEntity;
 import java.time.Clock;
@@ -40,6 +43,8 @@ public class DinnerHouseholdOwnershipService {
     private final DinnerHouseholdMemberMapper memberMapper;
     private final ObjectMapper objectMapper;
     private final Clock clock;
+    private DinnerNotificationPublisher notificationPublisher =
+            DinnerNotificationPublisher.noop();
 
     @Autowired
     public DinnerHouseholdOwnershipService(
@@ -67,6 +72,11 @@ public class DinnerHouseholdOwnershipService {
         this.memberMapper = memberMapper;
         this.objectMapper = objectMapper;
         this.clock = clock;
+    }
+
+    @Autowired(required = false)
+    void setNotificationPublisher(DinnerNotificationPublisher notificationPublisher) {
+        this.notificationPublisher = Objects.requireNonNull(notificationPublisher);
     }
 
     @Transactional
@@ -124,6 +134,14 @@ public class DinnerHouseholdOwnershipService {
 
         long resultHouseholdVersion = Math.addExact(household.getVersion(), 1L);
         persistResult(command, household.getId(), resultHouseholdVersion, now);
+        notificationPublisher.toPartner(
+                household.getId(),
+                command.actorUserId(),
+                DinnerNotificationType.OWNERSHIP_TRANSFERRED,
+                DinnerNotificationReferenceType.HOUSEHOLD_OPERATION,
+                household.getId(),
+                resultHouseholdVersion,
+                "household-operation:" + command.idempotencyKey());
         return new HouseholdMutationResponse(
                 command.operationType(), false, true, resultHouseholdVersion);
     }

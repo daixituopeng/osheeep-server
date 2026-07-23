@@ -18,6 +18,7 @@ import com.osheeep.server.dinner.menu.entity.DinnerMenuEntity;
 import com.osheeep.server.dinner.menu.entity.DinnerMenuSelectionEntity;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuMapper;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuSelectionMapper;
+import com.osheeep.server.dinner.notification.mapper.DinnerNotificationMapper;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeIngredientEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeMethodEntity;
@@ -33,6 +34,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -54,6 +56,7 @@ public class DinnerAccountCleanupService {
     private final DinnerHouseholdInventoryMapper inventoryMapper;
     private final DinnerIngredientMapper ingredientMapper;
     private final DinnerHouseholdDataPurger dataPurger;
+    private DinnerNotificationMapper notificationMapper;
 
     public DinnerAccountCleanupService(
             DinnerHouseholdMapper householdMapper,
@@ -83,6 +86,11 @@ public class DinnerAccountCleanupService {
         this.inventoryMapper = inventoryMapper;
         this.ingredientMapper = ingredientMapper;
         this.dataPurger = dataPurger;
+    }
+
+    @Autowired(required = false)
+    void setNotificationMapper(DinnerNotificationMapper notificationMapper) {
+        this.notificationMapper = Objects.requireNonNull(notificationMapper);
     }
 
     /** Called only from {@link com.osheeep.server.user.AccountDeletionTransaction}. */
@@ -131,6 +139,9 @@ public class DinnerAccountCleanupService {
                 lockedMemberships.actorMemberships(),
                 deletedMembershipIds);
         revokeRemainingOpenInvites(userId, deletedAt);
+        if (notificationMapper != null) {
+            notificationMapper.deleteByRecipientId(userId);
+        }
     }
 
     private void removeFromSurvivingHousehold(

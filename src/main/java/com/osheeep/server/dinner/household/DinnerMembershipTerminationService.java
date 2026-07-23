@@ -22,6 +22,9 @@ import com.osheeep.server.dinner.menu.entity.DinnerMenuEntity;
 import com.osheeep.server.dinner.menu.entity.DinnerMenuSelectionEntity;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuMapper;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuSelectionMapper;
+import com.osheeep.server.dinner.notification.DinnerNotificationPublisher;
+import com.osheeep.server.dinner.notification.DinnerNotificationReferenceType;
+import com.osheeep.server.dinner.notification.DinnerNotificationType;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeIngredientEntity;
 import com.osheeep.server.user.UserMapper;
 import com.osheeep.server.user.entity.UserEntity;
@@ -58,6 +61,8 @@ public class DinnerMembershipTerminationService {
     private final DinnerIngredientMapper ingredientMapper;
     private final ObjectMapper objectMapper;
     private final Clock clock;
+    private DinnerNotificationPublisher notificationPublisher =
+            DinnerNotificationPublisher.noop();
 
     @Autowired
     public DinnerMembershipTerminationService(
@@ -114,6 +119,11 @@ public class DinnerMembershipTerminationService {
         this.ingredientMapper = ingredientMapper;
         this.objectMapper = objectMapper;
         this.clock = clock;
+    }
+
+    @Autowired(required = false)
+    void setNotificationPublisher(DinnerNotificationPublisher notificationPublisher) {
+        this.notificationPublisher = Objects.requireNonNull(notificationPublisher);
     }
 
     @Transactional
@@ -201,6 +211,8 @@ public class DinnerMembershipTerminationService {
         }
         long resultHouseholdVersion = Math.addExact(household.getVersion(), 1L);
         persistResult(command, householdId, policy, resultHouseholdVersion, now);
+        publishTerminationNotification(
+                command, context, householdId, resultHouseholdVersion);
         return new HouseholdMutationResponse(
                 command.operationType(),
                 false,
@@ -263,7 +275,40 @@ public class DinnerMembershipTerminationService {
                 throw new BusinessException(ErrorCode.DINNER_HOUSEHOLD_MEMBER_STATE_CONFLICT);
             }
         }
-        return new LockedTerminationContext(household, target, policy);
+        return new LockedTerminationContext(
+                household, List.copyOf(members), target, policy);
+    }
+
+    private void publishTerminationNotification(
+            HouseholdOperationCommand command,
+            LockedTerminationContext context,
+            Long householdId,
+            Long resultHouseholdVersion
+    ) {
+        if (context.policy() == TerminationPolicy.OWNER_REMOVED) {
+            notificationPublisher.toRecipient(
+                    context.target().getUserId(),
+                    null,
+                    DinnerNotificationType.MEMBER_REMOVED,
+                    DinnerNotificationReferenceType.HOUSEHOLD_OPERATION,
+                    householdId,
+                    resultHouseholdVersion,
+                    "household-operation:" + command.idempotencyKey());
+            return;
+        }
+        Long remainingUserId = context.members().stream()
+                .map(DinnerHouseholdMemberEntity::getUserId)
+                .filter(userId -> !Objects.equals(command.actorUserId(), userId))
+                .findFirst()
+                .orElseThrow(this::householdVersionConflict);
+        notificationPublisher.toRecipient(
+                remainingUserId,
+                householdId,
+                DinnerNotificationType.MEMBER_LEFT,
+                DinnerNotificationReferenceType.HOUSEHOLD_OPERATION,
+                householdId,
+                resultHouseholdVersion,
+                "household-operation:" + command.idempotencyKey());
     }
 
     private List<DinnerInviteCodeEntity> lockOpenInvites(Long householdId) {
@@ -558,6 +603,7 @@ public class DinnerMembershipTerminationService {
 
     private record LockedTerminationContext(
             DinnerHouseholdEntity household,
+            List<DinnerHouseholdMemberEntity> members,
             DinnerHouseholdMemberEntity target,
             TerminationPolicy policy
     ) {

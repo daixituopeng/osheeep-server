@@ -11,6 +11,7 @@ import com.osheeep.server.dinner.ingredient.mapper.DinnerIngredientMapper;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuActionMapper;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuMapper;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuSelectionMapper;
+import com.osheeep.server.dinner.notification.mapper.DinnerNotificationMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeIngredientMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMethodMapper;
@@ -122,6 +123,11 @@ public class TestUserMapperConfig {
     @Bean
     public DinnerMenuActionMapper dinnerMenuActionMapper() {
         return Mockito.mock(DinnerMenuActionMapper.class);
+    }
+
+    @Bean
+    public DinnerNotificationMapper dinnerNotificationMapper() {
+        return Mockito.mock(DinnerNotificationMapper.class);
     }
 
     @Bean

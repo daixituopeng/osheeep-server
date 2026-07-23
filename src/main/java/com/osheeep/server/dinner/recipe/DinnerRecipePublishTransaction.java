@@ -3,6 +3,9 @@ package com.osheeep.server.dinner.recipe;
 import com.osheeep.server.common.error.BusinessException;
 import com.osheeep.server.common.error.ErrorCode;
 import com.osheeep.server.dinner.image.DinnerImageAssetService;
+import com.osheeep.server.dinner.notification.DinnerNotificationPublisher;
+import com.osheeep.server.dinner.notification.DinnerNotificationReferenceType;
+import com.osheeep.server.dinner.notification.DinnerNotificationType;
 import com.osheeep.server.dinner.recipe.DinnerRecipeAuthorizer.RecipeAccess;
 import com.osheeep.server.dinner.recipe.dto.RecipeDraftResponse;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeEntity;
@@ -12,6 +15,7 @@ import java.util.Objects;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -22,6 +26,8 @@ public class DinnerRecipePublishTransaction {
     private final DinnerRecipeQueryService queryService;
     private final DinnerImageAssetService imageAssetService;
     private final RecipeDraftValidator validator;
+    private DinnerNotificationPublisher notificationPublisher =
+            DinnerNotificationPublisher.noop();
 
     public DinnerRecipePublishTransaction(
             DinnerRecipeMapper recipeMapper,
@@ -35,6 +41,11 @@ public class DinnerRecipePublishTransaction {
         this.queryService = queryService;
         this.imageAssetService = imageAssetService;
         this.validator = validator;
+    }
+
+    @Autowired(required = false)
+    void setNotificationPublisher(DinnerNotificationPublisher notificationPublisher) {
+        this.notificationPublisher = Objects.requireNonNull(notificationPublisher);
     }
 
     @Transactional
@@ -70,6 +81,14 @@ public class DinnerRecipePublishTransaction {
             draft.setLastModifiedBy(userId);
             draft.setVersion(draft.getVersion() + 1L);
             recipeMapper.updateById(draft);
+            notificationPublisher.toPartner(
+                    membership.householdId(),
+                    userId,
+                    DinnerNotificationType.FAMILY_RECIPE_UPDATED,
+                    DinnerNotificationReferenceType.RECIPE,
+                    recipeId,
+                    draft.getVersion(),
+                    "recipe:" + recipeId + ":version:" + draft.getVersion());
             return queryService.detail(membership, recipeId);
         } catch (DuplicateKeyException | PessimisticLockingFailureException exception) {
             throw new BusinessException(ErrorCode.DINNER_RECIPE_VERSION_CONFLICT);

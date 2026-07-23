@@ -18,6 +18,9 @@ import com.osheeep.server.dinner.menu.entity.DinnerMenuSelectionEntity;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuActionMapper;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuMapper;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuSelectionMapper;
+import com.osheeep.server.dinner.notification.DinnerNotificationPublisher;
+import com.osheeep.server.dinner.notification.DinnerNotificationReferenceType;
+import com.osheeep.server.dinner.notification.DinnerNotificationType;
 import com.osheeep.server.dinner.recipe.DinnerRecipeCatalogAssembler;
 import com.osheeep.server.dinner.recipe.dto.RecipeMethodSummaryResponse;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeEntity;
@@ -59,6 +62,8 @@ public class DinnerMenuService {
     private final DinnerHouseholdActorLabelService actorLabelService;
     private final BusinessDateResolver businessDateResolver;
     private final Clock clock;
+    private DinnerNotificationPublisher notificationPublisher =
+            DinnerNotificationPublisher.noop();
 
     @Autowired
     public DinnerMenuService(
@@ -102,6 +107,11 @@ public class DinnerMenuService {
         this.actorLabelService = actorLabelService;
         this.businessDateResolver = businessDateResolver;
         this.clock = clock;
+    }
+
+    @Autowired(required = false)
+    void setNotificationPublisher(DinnerNotificationPublisher notificationPublisher) {
+        this.notificationPublisher = Objects.requireNonNull(notificationPublisher);
     }
 
     @Transactional
@@ -159,13 +169,25 @@ public class DinnerMenuService {
                     validated.method() == null ? null : validated.method().id());
             selectionMapper.insert(selection);
         }
-        if ("CONFIRMED".equals(menu.getStatus())) {
+        boolean reconfirmRequired = "CONFIRMED".equals(menu.getStatus());
+        if (reconfirmRequired) {
             menu.setStatus("DRAFT");
             menu.setConfirmedBy(null);
             menu.setConfirmedAt(null);
         }
         menu.setVersion(menu.getVersion() + 1);
         menuMapper.updateById(menu);
+        DinnerNotificationType type = reconfirmRequired
+                ? DinnerNotificationType.MENU_RECONFIRM_REQUIRED
+                : DinnerNotificationType.PARTNER_SELECTION_UPDATED;
+        notificationPublisher.toPartner(
+                context.access().householdId(),
+                userId,
+                type,
+                DinnerNotificationReferenceType.MENU,
+                menu.getId(),
+                menu.getVersion(),
+                "menu:" + menu.getId() + ":version:" + menu.getVersion());
         return response(context, userId);
     }
 

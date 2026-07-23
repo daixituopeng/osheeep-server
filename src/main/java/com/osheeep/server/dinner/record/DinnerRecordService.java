@@ -16,6 +16,9 @@ import com.osheeep.server.dinner.menu.entity.DinnerMenuSelectionEntity;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuActionMapper;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuMapper;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuSelectionMapper;
+import com.osheeep.server.dinner.notification.DinnerNotificationPublisher;
+import com.osheeep.server.dinner.notification.DinnerNotificationReferenceType;
+import com.osheeep.server.dinner.notification.DinnerNotificationType;
 import com.osheeep.server.dinner.record.dto.CompleteMenuResponse;
 import com.osheeep.server.dinner.record.dto.RecordDetailResponse;
 import com.osheeep.server.dinner.record.dto.RecordDishResponse;
@@ -65,6 +68,8 @@ public class DinnerRecordService {
     private final DinnerHouseholdActorLabelService actorLabelService;
     private final BusinessDateResolver businessDateResolver;
     private final Clock clock;
+    private DinnerNotificationPublisher notificationPublisher =
+            DinnerNotificationPublisher.noop();
 
     @Autowired
     public DinnerRecordService(
@@ -112,6 +117,11 @@ public class DinnerRecordService {
         this.actorLabelService = actorLabelService;
         this.businessDateResolver = businessDateResolver;
         this.clock = clock;
+    }
+
+    @Autowired(required = false)
+    void setNotificationPublisher(DinnerNotificationPublisher notificationPublisher) {
+        this.notificationPublisher = Objects.requireNonNull(notificationPublisher);
     }
 
     @Transactional
@@ -208,6 +218,14 @@ public class DinnerRecordService {
         action.setActionType("COMPLETE");
         action.setIdempotencyKey(idempotencyKey);
         actionMapper.insert(action);
+        notificationPublisher.toPartner(
+                access.householdId(),
+                userId,
+                DinnerNotificationType.MENU_COMPLETED,
+                DinnerNotificationReferenceType.RECORD,
+                record.getId(),
+                menu.getVersion(),
+                "record:" + record.getId() + ":completed");
         return new CompleteMenuResponse(
                 record.getId(),
                 menuService.responseForLockedContext(userId, lockedContext, menu));

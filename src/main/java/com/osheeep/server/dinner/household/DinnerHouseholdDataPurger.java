@@ -16,6 +16,7 @@ import com.osheeep.server.dinner.menu.entity.DinnerMenuSelectionEntity;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuActionMapper;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuMapper;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuSelectionMapper;
+import com.osheeep.server.dinner.notification.mapper.DinnerNotificationMapper;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeIngredientEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeMethodEntity;
@@ -35,6 +36,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -61,6 +63,7 @@ public class DinnerHouseholdDataPurger {
     private final DinnerRecipeIngredientMapper recipeIngredientMapper;
     private final DinnerHouseholdInventoryMapper inventoryMapper;
     private final DinnerIngredientMapper ingredientMapper;
+    private DinnerNotificationMapper notificationMapper;
 
     public DinnerHouseholdDataPurger(
             DinnerHouseholdMapper householdMapper,
@@ -94,6 +97,11 @@ public class DinnerHouseholdDataPurger {
         this.recipeIngredientMapper = recipeIngredientMapper;
         this.inventoryMapper = inventoryMapper;
         this.ingredientMapper = ingredientMapper;
+    }
+
+    @Autowired(required = false)
+    void setNotificationMapper(DinnerNotificationMapper notificationMapper) {
+        this.notificationMapper = Objects.requireNonNull(notificationMapper);
     }
 
     @Transactional(propagation = Propagation.MANDATORY)
@@ -206,6 +214,9 @@ public class DinnerHouseholdDataPurger {
                 com.osheeep.server.dinner.household.entity.DinnerHouseholdOperationEntity.class)
                 .eq(com.osheeep.server.dinner.household.entity.DinnerHouseholdOperationEntity::getHouseholdId,
                         householdId));
+        if (notificationMapper != null) {
+            notificationMapper.deleteByHouseholdId(householdId);
+        }
     }
 
     private LockedRecipeRows lockRecipeRows(Long householdId) {

@@ -7,6 +7,7 @@ import com.osheeep.server.common.api.RequestIdFilter;
 import com.osheeep.server.dinner.recipe.RecipeValidationException;
 import com.osheeep.server.dinner.recipe.dto.RecipeValidationIssue;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -23,10 +24,12 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -69,6 +72,17 @@ class GlobalExceptionHandlerTest {
         mockMvc.perform(post("/test/validation")
                         .header(RequestIdFilter.REQUEST_ID_HEADER, REQUEST_ID)
                         .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.requestId").value(REQUEST_ID));
+    }
+
+    @Test
+    void methodConstraintFailureReturnsValidationError() throws Exception {
+        mockMvc.perform(get("/test/method-validation")
+                        .queryParam("limit", "0")
+                        .header(RequestIdFilter.REQUEST_ID_HEADER, REQUEST_ID))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"))
@@ -122,6 +136,7 @@ class GlobalExceptionHandlerTest {
     }
 
     @RestController
+    @Validated
     @RequestMapping("/test")
     static class TestController {
 
@@ -149,6 +164,11 @@ class GlobalExceptionHandlerTest {
         @GetMapping("/success")
         ApiResponse<String> success() {
             return ApiResponse.ok("ok");
+        }
+
+        @GetMapping("/method-validation")
+        ApiResponse<Integer> methodValidation(@RequestParam @Min(1) int limit) {
+            return ApiResponse.ok(limit);
         }
     }
 

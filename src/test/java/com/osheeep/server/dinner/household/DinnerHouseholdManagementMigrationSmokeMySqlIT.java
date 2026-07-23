@@ -80,7 +80,8 @@ public class DinnerHouseholdManagementMigrationSmokeMySqlIT {
                 "V4 invalid orphan household",
                 925_001L);
 
-        Flyway flyway = configuredFlyway(dataSource, catalog, null);
+        Flyway flyway = configuredFlyway(
+                dataSource, catalog, MigrationVersion.fromVersion("8"));
         assertThatThrownBy(() -> migrate(harness, flyway, catalog))
                 .hasRootCauseMessage(
                         "V8 household management migration rejected a household without members");
@@ -88,7 +89,7 @@ public class DinnerHouseholdManagementMigrationSmokeMySqlIT {
         jdbcTemplate.update("DELETE FROM dinner_households WHERE id = ?", 925_101L);
         jdbcTemplate.execute("DROP PROCEDURE IF EXISTS assert_dinner_household_management_v8_preconditions");
         flyway.repair();
-        migrate(harness, dataSource, catalog, null);
+        migrate(harness, dataSource, catalog, MigrationVersion.fromVersion("8"));
 
         assertLatestSuccessfulVersion(jdbcTemplate, "8");
         assertV8Schema(jdbcTemplate, catalog);
@@ -99,7 +100,7 @@ public class DinnerHouseholdManagementMigrationSmokeMySqlIT {
         String catalog = harness.freshCatalog();
         DataSource dataSource = harness.dataSourceFor(catalog);
 
-        migrate(harness, dataSource, catalog, null);
+        migrate(harness, dataSource, catalog, MigrationVersion.fromVersion("8"));
 
         JdbcTemplate jdbcTemplate = new JdbcTemplate(dataSource);
         assertLatestSuccessfulVersion(jdbcTemplate, "8");
@@ -121,7 +122,7 @@ public class DinnerHouseholdManagementMigrationSmokeMySqlIT {
         assertLatestSuccessfulVersion(jdbcTemplate, "7");
         LegacyFixture fixture = insertV7Fixture(jdbcTemplate);
 
-        migrate(harness, dataSource, catalog, null);
+        migrate(harness, dataSource, catalog, MigrationVersion.fromVersion("8"));
 
         assertLatestSuccessfulVersion(jdbcTemplate, "8");
         assertV8Schema(jdbcTemplate, catalog);

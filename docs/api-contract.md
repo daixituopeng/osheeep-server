@@ -402,6 +402,49 @@ Example immutable household record dish:
 
 Invalid recipe identity or state returns HTTP 400 with `DINNER_RECIPE_INVALID` and message `Dinner recipe is invalid`. Selection rejects unknown, non-published, foreign-household, incomplete, or otherwise nonselectable recipes. Rendering a saved menu rejects a missing recipe, an invalid system identity, a null/non-positive household saved version, inconsistent identities for the same recipe, an invalid saved method association, or missing approved list-image data; it intentionally returns the positive saved household `recipeVersion` without comparing it with the live aggregate version. Completion performs the stronger immutable-record check and additionally rejects a saved household version that no longer equals the live recipe version, as well as tampered method ownership, ingredient visibility, household ownership, or snapshot data. Discovery omits invalid household catalog entries instead of returning them. Completion validates this state before record creation, and its transaction does not retain partial record or menu-completion writes on failure.
 
+## Dinner Notifications
+
+Flyway migration `V9__add_dinner_notifications.sql` adds an authenticated, privacy-safe in-app notification feed. V9 does not modify V1–V8. A row stores the recipient, optional active-household scope, controlled notification type, controlled reference identity/version, a SHA-256 dedupe key, read time, creation time and expiry. It deliberately has no user, household or business foreign keys: notification writes occur at the end of existing domain lock orders, while account deletion and household dissolution remove rows explicitly. CHECK constraints, active-recipient snapshots, visibility queries and cleanup tests enforce the contract without introducing reverse parent-row locks.
+
+All notification routes require a bearer token:
+
+| Method | Path                                            | Request | Response data |
+| ------ | ----------------------------------------------- | ------- | ------------- |
+| GET    | `/api/dinner/notifications`                     | Optional `beforeId`; `limit` defaults to 20 and must be 1–50 | `{items, unreadCount, nextBeforeId}` |
+| GET    | `/api/dinner/notifications/unread-count`        | None | `{unreadCount}` |
+| PUT    | `/api/dinner/notifications/{notificationId}/read` | None | No data |
+| PUT    | `/api/dinner/notifications/read-all`            | None | `{updatedCount}` |
+
+Items are ordered by descending ID, which is the stable cursor order for rows created with database-millisecond UTC times. Each item contains only:
+
+```json
+{
+  "id": 42,
+  "type": "MENU_RECONFIRM_REQUIRED",
+  "title": "今晚菜单需要重新确认",
+  "body": "TA 修改了选择，请查看最新内容",
+  "target": "TONIGHT",
+  "read": false,
+  "createdAt": "2026-07-23T10:26:00Z"
+}
+```
+
+The first release type allowlist is `PARTNER_JOINED`, `PARTNER_SELECTION_UPDATED`, `MENU_RECONFIRM_REQUIRED`, `MENU_COMPLETED`, `FAMILY_RECIPE_UPDATED`, `INVENTORY_UPDATED`, `OWNERSHIP_TRANSFERRED`, `MEMBER_LEFT`, and `MEMBER_REMOVED`. Targets are controlled enum values only: `HOUSEHOLD_MANAGE`, `HOUSEHOLD_BINDING`, `TONIGHT`, `RECORDS`, `FAMILY_RECIPES`, or `INGREDIENTS`. Responses never contain a client-supplied URL, household ID, business reference ID/version, internal user ID, username, nickname, avatar, `openid`, or dedupe key.
+
+Visibility is evaluated for every list, count and read operation:
+
+- A personal `MEMBER_REMOVED` message has `household_id = NULL` and remains visible to its active recipient after removal.
+- A household-scoped message is visible only while the recipient's current `ACTIVE` membership belongs to that same household.
+- Old-household messages do not appear after leaving, removal, dissolution or joining another household.
+- Expired rows are never listed, counted or marked read. The default expiry is 90 days after creation; read state never extends it.
+- Account deletion deletes all rows received by that user. Household dissolution deletes all rows scoped to that household. A scheduled retention pass deletes expired rows.
+
+`beforeId` and `notificationId` must be positive; invalid query/path values return HTTP 400 `VALIDATION_ERROR`. A missing, foreign, expired or no-longer-visible single notification returns HTTP 404 `DINNER_NOTIFICATION_NOT_FOUND` without revealing whether another user's row exists. Single-read and read-all operations are idempotent.
+
+Domain services publish a notification only after their existing authorization, optimistic-version and idempotency checks succeed, in the same transaction as the business change. Fixed reference type/id/version semantics derive a deterministic dedupe key. Duplicate delivery of the same successful semantic event is treated as already published, while other persistence failures abort the transaction so the business change cannot commit without its in-app notification. Events cover partner join, partner selection changes or reconfirmation, menu completion, household-recipe publication, inventory creation/update/removal, ownership transfer, member leave and member removal.
+
+The local V9 migration integration test uses a disposable loopback-only MySQL 8.0.45 instance and covers fresh, production-shaped V4 and current V8 catalogs through V9. It verifies the CHECK constraints, absence of foreign keys, valid rows and dedupe enforcement, then removes every ephemeral catalog and container. This is local migration evidence only; production V9, server deployment, WeChat upload and subscription-message templates have not been executed.
+
 ## Thought Clusters
 
 | Method | Path                             | Request body | Response data          |

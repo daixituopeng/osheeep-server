@@ -12,6 +12,9 @@ import com.osheeep.server.dinner.household.entity.DinnerInviteCodeEntity;
 import com.osheeep.server.dinner.household.mapper.DinnerHouseholdMapper;
 import com.osheeep.server.dinner.household.mapper.DinnerHouseholdMemberMapper;
 import com.osheeep.server.dinner.household.mapper.DinnerInviteCodeMapper;
+import com.osheeep.server.dinner.notification.DinnerNotificationPublisher;
+import com.osheeep.server.dinner.notification.DinnerNotificationReferenceType;
+import com.osheeep.server.dinner.notification.DinnerNotificationType;
 import com.osheeep.server.user.UserMapper;
 import com.osheeep.server.user.entity.UserEntity;
 import java.time.Clock;
@@ -56,6 +59,8 @@ public class DinnerHouseholdWriteService {
     private final InviteCodeGenerator inviteCodeGenerator;
     private final InviteCodeHasher inviteCodeHasher;
     private final Clock clock;
+    private DinnerNotificationPublisher notificationPublisher =
+            DinnerNotificationPublisher.noop();
 
     @Autowired
     public DinnerHouseholdWriteService(
@@ -104,6 +109,11 @@ public class DinnerHouseholdWriteService {
         this.inviteCodeGenerator = inviteCodeGenerator;
         this.inviteCodeHasher = inviteCodeHasher;
         this.clock = clock;
+    }
+
+    @Autowired(required = false)
+    void setNotificationPublisher(DinnerNotificationPublisher notificationPublisher) {
+        this.notificationPublisher = Objects.requireNonNull(notificationPublisher);
     }
 
     @Transactional
@@ -190,6 +200,16 @@ public class DinnerHouseholdWriteService {
             household.setInviteRevision(household.getInviteRevision() + 1L);
 
             draftLifecycleService.rebindUnboundDrafts(actorUserId, household.getId());
+            notificationPublisher.toPartner(
+                    household.getId(),
+                    actorUserId,
+                    DinnerNotificationType.PARTNER_JOINED,
+                    DinnerNotificationReferenceType.HOUSEHOLD,
+                    household.getId(),
+                    household.getVersion(),
+                    "household:" + household.getId()
+                            + ":joined:" + actorUserId
+                            + ":version:" + household.getVersion());
             return response(household, member, members.size() + 1);
         } catch (DuplicateKeyException exception) {
             throw mapJoinDuplicate(exception);

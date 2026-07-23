@@ -12,6 +12,9 @@ import com.osheeep.server.dinner.ingredient.entity.DinnerHouseholdInventoryEntit
 import com.osheeep.server.dinner.ingredient.entity.DinnerIngredientEntity;
 import com.osheeep.server.dinner.ingredient.mapper.DinnerHouseholdInventoryMapper;
 import com.osheeep.server.dinner.ingredient.mapper.DinnerIngredientMapper;
+import com.osheeep.server.dinner.notification.DinnerNotificationPublisher;
+import com.osheeep.server.dinner.notification.DinnerNotificationReferenceType;
+import com.osheeep.server.dinner.notification.DinnerNotificationType;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -23,6 +26,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.PessimisticLockingFailureException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -34,6 +38,8 @@ public class DinnerIngredientService {
     private final DinnerIngredientMapper ingredientMapper;
     private final DinnerHouseholdInventoryMapper inventoryMapper;
     private final DinnerHouseholdAccessService accessService;
+    private DinnerNotificationPublisher notificationPublisher =
+            DinnerNotificationPublisher.noop();
 
     public DinnerIngredientService(
             DinnerIngredientMapper ingredientMapper,
@@ -43,6 +49,11 @@ public class DinnerIngredientService {
         this.ingredientMapper = ingredientMapper;
         this.inventoryMapper = inventoryMapper;
         this.accessService = accessService;
+    }
+
+    @Autowired(required = false)
+    void setNotificationPublisher(DinnerNotificationPublisher notificationPublisher) {
+        this.notificationPublisher = Objects.requireNonNull(notificationPublisher);
     }
 
     public List<IngredientResponse> listIngredients(Long userId) {
@@ -119,6 +130,16 @@ public class DinnerIngredientService {
             updateInventoryItem(item);
         }
         DinnerHouseholdInventoryEntity persisted = inventoryMapper.selectById(item.getId());
+        notificationPublisher.toPartner(
+                access.householdId(),
+                userId,
+                DinnerNotificationType.INVENTORY_UPDATED,
+                DinnerNotificationReferenceType.INVENTORY,
+                ingredientId,
+                persisted.getVersion(),
+                "inventory:" + access.householdId()
+                        + ":ingredient:" + ingredientId
+                        + ":version:" + persisted.getVersion());
         return toInventoryResponse(persisted, ingredient);
     }
 
@@ -135,10 +156,23 @@ public class DinnerIngredientService {
         if (!Objects.equals(item.getVersion(), expectedVersion)) {
             throw new BusinessException(ErrorCode.DINNER_INVENTORY_VERSION_CONFLICT);
         }
-        inventoryMapper.delete(Wrappers.<DinnerHouseholdInventoryEntity>lambdaQuery()
+        int deleted = inventoryMapper.delete(Wrappers.<DinnerHouseholdInventoryEntity>lambdaQuery()
                 .eq(DinnerHouseholdInventoryEntity::getHouseholdId, access.householdId())
                 .eq(DinnerHouseholdInventoryEntity::getIngredientId, ingredientId)
                 .eq(DinnerHouseholdInventoryEntity::getVersion, expectedVersion));
+        if (deleted != 1) {
+            throw new BusinessException(ErrorCode.DINNER_INVENTORY_VERSION_CONFLICT);
+        }
+        notificationPublisher.toPartner(
+                access.householdId(),
+                userId,
+                DinnerNotificationType.INVENTORY_UPDATED,
+                DinnerNotificationReferenceType.INVENTORY,
+                ingredientId,
+                expectedVersion + 1L,
+                "inventory:" + access.householdId()
+                        + ":ingredient:" + ingredientId
+                        + ":removed-version:" + expectedVersion);
     }
 
     private DinnerIngredientEntity requireActiveIngredient(Long ingredientId, Long householdId) {

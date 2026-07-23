@@ -41,7 +41,7 @@ public class DinnerHouseholdRecipeMenuMigrationMySqlIT {
         String catalog = harness.freshCatalog();
         DataSource dataSource = harness.dataSourceFor(catalog);
 
-        migrate(harness, dataSource, catalog, null);
+        migrate(harness, dataSource, catalog, MigrationVersion.fromVersion("7"));
 
         JdbcTemplate jdbcTemplate = new JdbcTemplate(dataSource);
         assertLatestSuccessfulVersion(jdbcTemplate, "7");
@@ -57,7 +57,7 @@ public class DinnerHouseholdRecipeMenuMigrationMySqlIT {
         assertLatestSuccessfulVersion(jdbcTemplate, "4");
         LegacyFixture fixture = insertV4Fixture(jdbcTemplate);
 
-        migrate(harness, dataSource, catalog, null);
+        migrate(harness, dataSource, catalog, MigrationVersion.fromVersion("7"));
 
         assertLatestSuccessfulVersion(jdbcTemplate, "7");
         assertV7Schema(jdbcTemplate, catalog);
@@ -90,7 +90,7 @@ public class DinnerHouseholdRecipeMenuMigrationMySqlIT {
         migrate(harness, dataSource, catalog, MigrationVersion.fromVersion("6"));
         assertLatestSuccessfulVersion(jdbcTemplate, "6");
 
-        migrate(harness, dataSource, catalog, null);
+        migrate(harness, dataSource, catalog, MigrationVersion.fromVersion("7"));
 
         assertLatestSuccessfulVersion(jdbcTemplate, "7");
         assertV7Schema(jdbcTemplate, catalog);

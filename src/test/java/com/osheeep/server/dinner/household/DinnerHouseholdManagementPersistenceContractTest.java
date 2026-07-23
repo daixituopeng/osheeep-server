@@ -29,7 +29,7 @@ class DinnerHouseholdManagementPersistenceContractTest {
     private static final Map<String, String> IMMUTABLE_MIGRATION_SHA256 = immutableMigrations();
 
     @Test
-    void v1ThroughV7RemainByteForByteImmutable() throws Exception {
+    void v1ThroughV8RemainByteForByteImmutable() throws Exception {
         for (Map.Entry<String, String> baseline : IMMUTABLE_MIGRATION_SHA256.entrySet()) {
             Path migration = MIGRATION_DIRECTORY.resolve(baseline.getKey());
 
@@ -376,6 +376,7 @@ class DinnerHouseholdManagementPersistenceContractTest {
         migrations.put("V5__add_recipe_ingredients_and_household_inventory.sql", "73f18c7bedffaec0f03ae5dfa987c78de504f399e1d3f53d63a24c6302df3009");
         migrations.put("V6__add_household_custom_recipes.sql", "3ed0a3f39e31ebcd3f27593e0cc5201792ac9ee98d3f02d2336c188ee28cf94c");
         migrations.put("V7__connect_household_recipes_to_menus.sql", "7ce7255a0086e44234d4de0138e00126999adf225115fa47c10c2af872fd997d");
+        migrations.put("V8__add_household_management.sql", "4333805e5e578239066240f1114e3a0e7f771d3b952936de376130dd6c436abc");
         return Map.copyOf(migrations);
     }
 
