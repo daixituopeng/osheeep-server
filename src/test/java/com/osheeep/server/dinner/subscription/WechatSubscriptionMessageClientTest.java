@@ -49,6 +49,8 @@ class WechatSubscriptionMessageClientTest {
                                 + "?access_token=token-1"))
                 .andExpect(method(HttpMethod.POST))
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(request -> assertThat(
+                        request.getHeaders().getContentLength()).isPositive())
                 .andExpect(content().json("""
                         {
                           "touser":"openid-8",

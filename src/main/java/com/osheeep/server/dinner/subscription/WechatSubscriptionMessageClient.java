@@ -9,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
@@ -70,13 +71,16 @@ public class WechatSubscriptionMessageClient
             String token,
             WechatSubscriptionMessage message
     ) {
+        byte[] payload = serialize(message);
         try {
             String body = restClient.post()
                     .uri(uriBuilder -> uriBuilder
                             .path("/cgi-bin/message/subscribe/send")
                             .queryParam("access_token", token)
                             .build())
-                    .body(toRequest(message))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .contentLength(payload.length)
+                    .body(payload)
                     .retrieve()
                     .body(String.class);
             if (body == null || body.isBlank()) {
@@ -93,6 +97,17 @@ public class WechatSubscriptionMessageClient
         } catch (JsonProcessingException exception) {
             log.warn(
                     "WeChat subscription response parsing failed, exception={}",
+                    exception.getClass().getSimpleName());
+            throw new WechatSubscriptionTransportException();
+        }
+    }
+
+    private byte[] serialize(WechatSubscriptionMessage message) {
+        try {
+            return objectMapper.writeValueAsBytes(toRequest(message));
+        } catch (JsonProcessingException exception) {
+            log.warn(
+                    "WeChat subscription request serialization failed, exception={}",
                     exception.getClass().getSimpleName());
             throw new WechatSubscriptionTransportException();
         }
