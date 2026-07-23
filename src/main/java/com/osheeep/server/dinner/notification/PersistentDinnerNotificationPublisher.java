@@ -17,6 +17,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -29,14 +30,16 @@ public class PersistentDinnerNotificationPublisher implements DinnerNotification
 
     private final DinnerHouseholdMemberMapper memberMapper;
     private final DinnerNotificationMapper notificationMapper;
+    private final ApplicationEventPublisher eventPublisher;
     private final Clock clock;
 
     @Autowired
     public PersistentDinnerNotificationPublisher(
             DinnerHouseholdMemberMapper memberMapper,
-            DinnerNotificationMapper notificationMapper
+            DinnerNotificationMapper notificationMapper,
+            ApplicationEventPublisher eventPublisher
     ) {
-        this(memberMapper, notificationMapper, Clock.systemUTC());
+        this(memberMapper, notificationMapper, eventPublisher, Clock.systemUTC());
     }
 
     PersistentDinnerNotificationPublisher(
@@ -44,8 +47,18 @@ public class PersistentDinnerNotificationPublisher implements DinnerNotification
             DinnerNotificationMapper notificationMapper,
             Clock clock
     ) {
+        this(memberMapper, notificationMapper, event -> {}, clock);
+    }
+
+    PersistentDinnerNotificationPublisher(
+            DinnerHouseholdMemberMapper memberMapper,
+            DinnerNotificationMapper notificationMapper,
+            ApplicationEventPublisher eventPublisher,
+            Clock clock
+    ) {
         this.memberMapper = memberMapper;
         this.notificationMapper = notificationMapper;
+        this.eventPublisher = eventPublisher;
         this.clock = clock;
     }
 
@@ -132,6 +145,7 @@ public class PersistentDinnerNotificationPublisher implements DinnerNotification
 
         LocalDateTime createdAt = LocalDateTime.ofInstant(clock.instant(), ZoneOffset.UTC)
                 .truncatedTo(ChronoUnit.MILLIS);
+        String eventDedupeKey = dedupeKey(recipientUserId, type, sourceKey);
         DinnerNotificationEntity notification = new DinnerNotificationEntity();
         notification.setRecipientId(recipientUserId);
         notification.setHouseholdId(householdId);
@@ -139,7 +153,7 @@ public class PersistentDinnerNotificationPublisher implements DinnerNotification
         notification.setReferenceType(referenceType.name());
         notification.setReferenceId(referenceId);
         notification.setReferenceVersion(referenceVersion);
-        notification.setDedupeKey(dedupeKey(recipientUserId, type, sourceKey));
+        notification.setDedupeKey(eventDedupeKey);
         notification.setCreatedAt(createdAt);
         notification.setExpiresAt(createdAt.plusDays(RETENTION_DAYS));
         try {
@@ -148,6 +162,18 @@ public class PersistentDinnerNotificationPublisher implements DinnerNotification
             }
         } catch (DuplicateKeyException ignored) {
             // The same committed domain event was already delivered.
+        }
+        try {
+            eventPublisher.publishEvent(new DinnerNotificationCommittedEvent(
+                    recipientUserId,
+                    householdId,
+                    type,
+                    referenceType,
+                    referenceId,
+                    referenceVersion,
+                    eventDedupeKey));
+        } catch (RuntimeException ignored) {
+            // Optional external reminders must never change the business result.
         }
     }
 

@@ -19,6 +19,7 @@ import com.osheeep.server.dinner.menu.entity.DinnerMenuSelectionEntity;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuMapper;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuSelectionMapper;
 import com.osheeep.server.dinner.notification.mapper.DinnerNotificationMapper;
+import com.osheeep.server.dinner.subscription.mapper.DinnerSubscriptionDeliveryMapper;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeIngredientEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeMethodEntity;
@@ -57,6 +58,7 @@ public class DinnerAccountCleanupService {
     private final DinnerIngredientMapper ingredientMapper;
     private final DinnerHouseholdDataPurger dataPurger;
     private DinnerNotificationMapper notificationMapper;
+    private DinnerSubscriptionDeliveryMapper subscriptionDeliveryMapper;
 
     public DinnerAccountCleanupService(
             DinnerHouseholdMapper householdMapper,
@@ -91,6 +93,14 @@ public class DinnerAccountCleanupService {
     @Autowired(required = false)
     void setNotificationMapper(DinnerNotificationMapper notificationMapper) {
         this.notificationMapper = Objects.requireNonNull(notificationMapper);
+    }
+
+    @Autowired(required = false)
+    void setSubscriptionDeliveryMapper(
+            DinnerSubscriptionDeliveryMapper subscriptionDeliveryMapper
+    ) {
+        this.subscriptionDeliveryMapper =
+                Objects.requireNonNull(subscriptionDeliveryMapper);
     }
 
     /** Called only from {@link com.osheeep.server.user.AccountDeletionTransaction}. */
@@ -141,6 +151,9 @@ public class DinnerAccountCleanupService {
         revokeRemainingOpenInvites(userId, deletedAt);
         if (notificationMapper != null) {
             notificationMapper.deleteByRecipientId(userId);
+        }
+        if (subscriptionDeliveryMapper != null) {
+            subscriptionDeliveryMapper.deleteByRecipientId(userId);
         }
     }
 

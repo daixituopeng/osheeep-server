@@ -8,6 +8,10 @@ import org.apache.ibatis.annotations.Select;
 @Mapper
 public interface WechatUserIdentityMapper extends BaseMapper<WechatUserIdentityEntity> {
     @Select("SELECT * FROM wechat_user_identities "
+            + "WHERE user_id = #{userId} ORDER BY id LIMIT 1")
+    WechatUserIdentityEntity selectByUserId(@Param("userId") Long userId);
+
+    @Select("SELECT * FROM wechat_user_identities "
             + "WHERE user_id = #{userId} ORDER BY id LIMIT 1 FOR UPDATE")
     WechatUserIdentityEntity selectByUserIdForUpdate(@Param("userId") Long userId);
 }

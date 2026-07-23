@@ -31,6 +31,7 @@ import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeIngredientMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMethodMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMethodStepMapper;
+import com.osheeep.server.dinner.subscription.mapper.DinnerSubscriptionDeliveryMapper;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
@@ -61,6 +62,7 @@ class DinnerAccountCleanupServiceTest {
     @Mock private DinnerHouseholdInventoryMapper inventoryMapper;
     @Mock private DinnerIngredientMapper ingredientMapper;
     @Mock private DinnerHouseholdDataPurger dataPurger;
+    @Mock private DinnerSubscriptionDeliveryMapper subscriptionDeliveryMapper;
 
     private DinnerAccountCleanupService service;
 
@@ -81,6 +83,7 @@ class DinnerAccountCleanupServiceTest {
                 householdMapper, memberMapper, operationMapper, inviteMapper,
                 menuMapper, selectionMapper, recipeMapper, recipeIngredientMapper,
                 methodMapper, stepMapper, inventoryMapper, ingredientMapper, dataPurger);
+        service.setSubscriptionDeliveryMapper(subscriptionDeliveryMapper);
         lenient().when(recipeMapper.selectList(any())).thenReturn(List.of());
         lenient().when(memberMapper.selectIdsByUserId(7L)).thenReturn(List.of());
         lenient().when(operationMapper.selectByActorOrTargetMembershipIdsForUpdate(
@@ -100,6 +103,7 @@ class DinnerAccountCleanupServiceTest {
         service.removeUser(7L, DELETED_AT);
 
         verify(dataPurger).purgeHousehold(11L, List.of(owner), Set.of(7L));
+        verify(subscriptionDeliveryMapper).deleteByRecipientId(7L);
         verify(householdMapper, never()).advanceMembershipAndInviteRevision(
                 any(), any(), any());
     }

@@ -17,6 +17,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
 
 class PersistentDinnerNotificationPublisherTest {
@@ -95,6 +96,36 @@ class PersistentDinnerNotificationPublisherTest {
                 "operation:00000000-0000-4000-8000-000000000001");
 
         verify(notificationMapper).insert(any(DinnerNotificationEntity.class));
+    }
+
+    @Test
+    void publishesOnlyControlledSubscriptionMetadataAfterTheNotificationWrite() {
+        ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
+        PersistentDinnerNotificationPublisher eventPublisherUnderTest =
+                new PersistentDinnerNotificationPublisher(
+                        memberMapper, notificationMapper, eventPublisher, CLOCK);
+        when(notificationMapper.insert(any(DinnerNotificationEntity.class))).thenReturn(1);
+
+        eventPublisherUnderTest.toRecipient(
+                8L,
+                11L,
+                DinnerNotificationType.PARTNER_JOINED,
+                DinnerNotificationReferenceType.HOUSEHOLD,
+                11L,
+                2L,
+                "household:11:joined:72");
+
+        ArgumentCaptor<DinnerNotificationCommittedEvent> captor =
+                ArgumentCaptor.forClass(DinnerNotificationCommittedEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue()).satisfies(event -> {
+            assertThat(event.recipientUserId()).isEqualTo(8L);
+            assertThat(event.householdId()).isEqualTo(11L);
+            assertThat(event.type()).isEqualTo(DinnerNotificationType.PARTNER_JOINED);
+            assertThat(event.eventDedupeKey()).matches("[0-9a-f]{64}");
+            assertThat(event.toString()).doesNotContain(
+                    "household:11:joined:72", "openid", "template");
+        });
     }
 
     private DinnerHouseholdMemberEntity member(Long membershipId, Long userId) {

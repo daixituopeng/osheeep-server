@@ -445,6 +445,69 @@ Domain services publish a notification only after their existing authorization, 
 
 The local V9 migration integration test uses a disposable loopback-only MySQL 8.0.45 instance and covers fresh, production-shaped V4 and current V8 catalogs through V9. It verifies the CHECK constraints, absence of foreign keys, valid rows and dedupe enforcement, then removes every ephemeral catalog and container. This is local migration evidence only; production V9, server deployment, WeChat upload and subscription-message templates have not been executed.
 
+## Dinner WeChat Subscriptions
+
+Flyway migration `V10__add_dinner_subscription_deliveries.sql` adds optional, one-time WeChat subscription delivery state without modifying V1–V9. WeChat delivery supplements the V9 in-app feed: accepting, rejecting or failing a WeChat request never changes the completed business action and never removes or rolls back the in-app notification.
+
+All subscription routes require a bearer token and derive the user and active household from the server-side session:
+
+| Method | Path | Request | Response data |
+| ------ | ---- | ------- | ------------- |
+| GET | `/api/dinner/subscriptions/config` | None | `{actions}` containing only currently promptable runtime template IDs |
+| POST | `/api/dinner/subscriptions/results` | UUID v4 `requestId`, controlled `action`, controlled `results` | No data |
+
+The first-release actions are fixed:
+
+- `HOUSEHOLD_INVITE_READY` may request `PARTNER_JOINED`.
+- `MENU_CONFIRMED` may request `MENU_CHANGED` and `MENU_COMPLETED`.
+
+`GET /config` returns an empty `actions` array when the feature is disabled, there is no active household, or every relevant scenario is already blocked by an unexpired authorization/result. A sample enabled response is:
+
+```json
+{
+  "actions": [
+    {
+      "action": "MENU_CONFIRMED",
+      "templates": [
+        { "scenario": "MENU_CHANGED", "templateId": "runtime-value" },
+        { "scenario": "MENU_COMPLETED", "templateId": "runtime-value" }
+      ]
+    }
+  ]
+}
+```
+
+The template ID is runtime configuration needed by `wx.requestSubscribeMessage`; it is never accepted back from the client and is not stored in V10. The client may register only the scenarios returned for the successful action:
+
+```json
+{
+  "requestId": "00000000-0000-4000-8000-000000000016",
+  "action": "MENU_CONFIRMED",
+  "results": [
+    { "scenario": "MENU_CHANGED", "outcome": "ACCEPT" },
+    { "scenario": "MENU_COMPLETED", "outcome": "REJECT" }
+  ]
+}
+```
+
+Outcomes are exactly `ACCEPT`, `REJECT`, `BAN` or `FILTER`. The list must contain 1–5 distinct scenarios, every scenario must belong to the action allowlist, and `requestId` must be UUID v4. Invalid, disabled, unauthenticated or nonmember requests fail without a write. `(recipient_id, request_key, scenario)` makes an identical client retry idempotent.
+
+V10 stores recipient, household, scenario, request key, controlled outcome/status, controlled notification reference, event dedupe key, bounded attempt state and timestamps. It deliberately stores no template ID/title/field key, `openid`, access token, WeChat error text, household name, recipe name or other free text. Status is exactly `WAITING_EVENT`, `READY`, `SENDING`, `SENT`, `REJECTED` or `TERMINAL_FAILED`; database CHECK constraints enforce the outcome/status/event shape and the 0–5 attempt bound.
+
+After the V9 notification transaction commits, a separate transaction consumes at most one matching unexpired `WAITING_EVENT` authorization:
+
+- `PARTNER_JOINED` consumes a `PARTNER_JOINED` event.
+- `MENU_CHANGED` consumes the first subsequent `PARTNER_SELECTION_UPDATED` or `MENU_RECONFIRM_REQUIRED` event.
+- `MENU_COMPLETED` consumes a `MENU_COMPLETED` event.
+
+The sender claims a row in a short transaction, calls WeChat outside the transaction, then records the result in another short transaction. It sends only controlled notification title/body text, an event time rendered in `Asia/Shanghai`, and a fixed mini-program page. Invalid token responses `40001`/`40014` refresh the token at most once per send. Transport failures, `-1` and `43108` retry with bounded backoff; no subscription, invalid template/data, platform ban and other terminal responses do not retry. A stale fifth attempt is terminalized without creating a sixth send.
+
+Records expire 90 days after registration. A scheduled cleanup deletes rows at the expiry boundary; account deletion deletes rows by recipient and household dissolution deletes rows by household. The table has no foreign keys so these lifecycle deletes do not introduce a reverse parent-row lock.
+
+Production configuration is disabled by default with `OSHEEEP_WECHAT_SUBSCRIPTION_ENABLED=false`. Enabling it requires three complete, distinct templates through the `OSHEEEP_WECHAT_SUBSCRIPTION_*` environment variables documented in `deploy/production/OPERATIONS.md`: each template needs its platform ID, exact platform title and distinct subject/time/note field keys, and the state must be `developer`, `trial` or `formal`. Missing or duplicate production configuration fails application startup. No formal template value is committed to this repository.
+
+On 2026-07-23, the isolated MySQL 8.0.45 V10 integration test passed 1/1 for fresh, production-shaped V4 and current V9 catalogs. It verified 19 columns, enforced CHECK constraints, no foreign keys, no template/openid columns, request/event uniqueness and invalid state rejection, then removed all generated catalogs and the temporary container. This is local migration evidence only: production V10, formal templates, deployment, experience-build upload and real WeChat delivery remain unexecuted.
+
 ## Thought Clusters
 
 | Method | Path                             | Request body | Response data          |

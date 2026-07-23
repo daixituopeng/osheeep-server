@@ -37,6 +37,7 @@ import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMethodStepMapper;
 import com.osheeep.server.dinner.record.entity.DinnerCookingRecordEntity;
 import com.osheeep.server.dinner.record.mapper.DinnerCookingRecordMapper;
 import com.osheeep.server.dinner.record.mapper.DinnerRecordDishSnapshotMapper;
+import com.osheeep.server.dinner.subscription.mapper.DinnerSubscriptionDeliveryMapper;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
@@ -67,6 +68,7 @@ class DinnerHouseholdDataPurgerTest {
     @Mock private DinnerRecipeIngredientMapper recipeIngredientMapper;
     @Mock private DinnerHouseholdInventoryMapper inventoryMapper;
     @Mock private DinnerIngredientMapper ingredientMapper;
+    @Mock private DinnerSubscriptionDeliveryMapper subscriptionDeliveryMapper;
 
     private DinnerHouseholdDataPurger purger;
 
@@ -91,6 +93,7 @@ class DinnerHouseholdDataPurgerTest {
                 selectionMapper, actionMapper, recordMapper, snapshotMapper, recipeMapper,
                 methodMapper, stepMapper, recipeIngredientMapper, inventoryMapper,
                 ingredientMapper);
+        purger.setSubscriptionDeliveryMapper(subscriptionDeliveryMapper);
     }
 
     @Test
@@ -125,6 +128,7 @@ class DinnerHouseholdDataPurgerTest {
         purger.purgeHousehold(11L, List.of(owner), Set.of());
 
         verify(recipeMapper).detachOwnedDraft(51L, 11L, 7L, 3L, null);
+        verify(subscriptionDeliveryMapper).deleteByHouseholdId(11L);
         verify(recipeMapper, never()).deleteBatchIds(any());
         assertThat(DinnerHouseholdDataPurger.class.getConstructors())
                 .singleElement()

@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration;
@@ -21,6 +22,37 @@ class ProductionDeploymentContractTest {
         assertThat(yaml).contains("max-file-size: 20MB");
         assertThat(yaml).contains("max-history: 14");
         assertThat(yaml).contains("total-size-cap: 300MB");
+    }
+
+    @Test
+    void productionSubscriptionTemplatesAreRuntimeOnlyAndDefaultDisabled()
+            throws IOException {
+        String yaml = readRequired("src/main/resources/application-prod.yml");
+        String manual = readRequired("deploy/production/OPERATIONS.md");
+        for (String variable : List.of(
+                "OSHEEEP_WECHAT_SUBSCRIPTION_ENABLED",
+                "OSHEEEP_WECHAT_SUBSCRIPTION_STATE",
+                "OSHEEEP_WECHAT_SUBSCRIPTION_PARTNER_JOINED_ID",
+                "OSHEEEP_WECHAT_SUBSCRIPTION_PARTNER_JOINED_TITLE",
+                "OSHEEEP_WECHAT_SUBSCRIPTION_PARTNER_JOINED_SUBJECT_KEY",
+                "OSHEEEP_WECHAT_SUBSCRIPTION_PARTNER_JOINED_TIME_KEY",
+                "OSHEEEP_WECHAT_SUBSCRIPTION_PARTNER_JOINED_NOTE_KEY",
+                "OSHEEEP_WECHAT_SUBSCRIPTION_MENU_CHANGED_ID",
+                "OSHEEEP_WECHAT_SUBSCRIPTION_MENU_CHANGED_TITLE",
+                "OSHEEEP_WECHAT_SUBSCRIPTION_MENU_CHANGED_SUBJECT_KEY",
+                "OSHEEEP_WECHAT_SUBSCRIPTION_MENU_CHANGED_TIME_KEY",
+                "OSHEEEP_WECHAT_SUBSCRIPTION_MENU_CHANGED_NOTE_KEY",
+                "OSHEEEP_WECHAT_SUBSCRIPTION_MENU_COMPLETED_ID",
+                "OSHEEEP_WECHAT_SUBSCRIPTION_MENU_COMPLETED_TITLE",
+                "OSHEEEP_WECHAT_SUBSCRIPTION_MENU_COMPLETED_SUBJECT_KEY",
+                "OSHEEEP_WECHAT_SUBSCRIPTION_MENU_COMPLETED_TIME_KEY",
+                "OSHEEEP_WECHAT_SUBSCRIPTION_MENU_COMPLETED_NOTE_KEY")) {
+            assertThat(yaml).contains(variable);
+            assertThat(manual).contains(variable);
+        }
+        assertThat(yaml).contains(
+                "enabled: ${OSHEEEP_WECHAT_SUBSCRIPTION_ENABLED:false}");
+        assertThat(manual).contains("启动阶段执行硬门禁");
     }
 
     @Test

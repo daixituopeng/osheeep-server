@@ -17,6 +17,7 @@ import com.osheeep.server.dinner.menu.mapper.DinnerMenuActionMapper;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuMapper;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuSelectionMapper;
 import com.osheeep.server.dinner.notification.mapper.DinnerNotificationMapper;
+import com.osheeep.server.dinner.subscription.mapper.DinnerSubscriptionDeliveryMapper;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeIngredientEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeMethodEntity;
@@ -64,6 +65,7 @@ public class DinnerHouseholdDataPurger {
     private final DinnerHouseholdInventoryMapper inventoryMapper;
     private final DinnerIngredientMapper ingredientMapper;
     private DinnerNotificationMapper notificationMapper;
+    private DinnerSubscriptionDeliveryMapper subscriptionDeliveryMapper;
 
     public DinnerHouseholdDataPurger(
             DinnerHouseholdMapper householdMapper,
@@ -102,6 +104,14 @@ public class DinnerHouseholdDataPurger {
     @Autowired(required = false)
     void setNotificationMapper(DinnerNotificationMapper notificationMapper) {
         this.notificationMapper = Objects.requireNonNull(notificationMapper);
+    }
+
+    @Autowired(required = false)
+    void setSubscriptionDeliveryMapper(
+            DinnerSubscriptionDeliveryMapper subscriptionDeliveryMapper
+    ) {
+        this.subscriptionDeliveryMapper =
+                Objects.requireNonNull(subscriptionDeliveryMapper);
     }
 
     @Transactional(propagation = Propagation.MANDATORY)
@@ -216,6 +226,9 @@ public class DinnerHouseholdDataPurger {
                         householdId));
         if (notificationMapper != null) {
             notificationMapper.deleteByHouseholdId(householdId);
+        }
+        if (subscriptionDeliveryMapper != null) {
+            subscriptionDeliveryMapper.deleteByHouseholdId(householdId);
         }
     }
 
