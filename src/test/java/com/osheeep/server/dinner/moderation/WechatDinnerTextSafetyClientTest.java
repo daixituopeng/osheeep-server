@@ -124,6 +124,26 @@ class WechatDinnerTextSafetyClientTest {
     }
 
     @Test
+    void alternateInvalidTokenCodeIsInvalidatedAndRetriedExactlyOnce() {
+        when(tokenProvider.currentToken()).thenReturn("stale-token", "fresh-token");
+        server.expect(requestTo(CHECK_URL + "stale-token"))
+                .andRespond(withSuccess(
+                        "{\"errcode\":40014,\"errmsg\":\"invalid access token\"}",
+                        MediaType.APPLICATION_JSON));
+        server.expect(requestTo(CHECK_URL + "fresh-token"))
+                .andRespond(withSuccess(
+                        "{\"errcode\":0,\"result\":{\"suggest\":\"pass\","
+                                + "\"label\":100}}",
+                        MediaType.APPLICATION_JSON));
+
+        assertThat(client.check("openid-7", "标题", "内容"))
+                .isEqualTo(DinnerTextSafetyResult.PASS);
+        verify(tokenProvider).invalidate("stale-token");
+        verify(tokenProvider, times(2)).currentToken();
+        server.verify();
+    }
+
+    @Test
     void secondInvalidTokenFailsClosedWithoutAThirdRequest() {
         when(tokenProvider.currentToken()).thenReturn("stale-token", "still-invalid-token");
         server.expect(requestTo(CHECK_URL + "stale-token"))

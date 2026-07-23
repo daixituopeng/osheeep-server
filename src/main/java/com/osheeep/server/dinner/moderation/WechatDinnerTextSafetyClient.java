@@ -13,6 +13,7 @@ import org.springframework.web.client.RestClientException;
 public class WechatDinnerTextSafetyClient implements DinnerTextSafetyGateway {
 
     private static final int INVALID_ACCESS_TOKEN = 40001;
+    private static final int INVALID_ACCESS_TOKEN_ALT = 40014;
 
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
@@ -91,7 +92,9 @@ public class WechatDinnerTextSafetyClient implements DinnerTextSafetyGateway {
     }
 
     private boolean isInvalidToken(CheckResponse response) {
-        return response != null && Integer.valueOf(INVALID_ACCESS_TOKEN).equals(response.errcode());
+        return response != null
+                && (Integer.valueOf(INVALID_ACCESS_TOKEN).equals(response.errcode())
+                || Integer.valueOf(INVALID_ACCESS_TOKEN_ALT).equals(response.errcode()));
     }
 
     private DinnerTextSafetyUnavailableException unavailable() {

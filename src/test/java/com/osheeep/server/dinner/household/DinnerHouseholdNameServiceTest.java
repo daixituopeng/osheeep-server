@@ -72,6 +72,8 @@ class DinnerHouseholdNameServiceTest {
         assertThat(service.prepareForCreate(7L, null)).isEqualTo("我们的小家");
         assertThat(service.prepareForCreate(7L, "")).isEqualTo("我们的小家");
         assertThat(service.prepareForCreate(7L, " \t\u3000")).isEqualTo("我们的小家");
+        assertThat(service.prepareForCreate(7L, "我们的小家")).isEqualTo("我们的小家");
+        assertThat(service.prepareForCreate(7L, "\u3000我们的小家 ")).isEqualTo("我们的小家");
 
         verifyNoInteractions(identityMapper, gateway);
     }

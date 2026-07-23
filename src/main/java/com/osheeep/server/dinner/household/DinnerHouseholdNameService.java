@@ -34,6 +34,9 @@ public class DinnerHouseholdNameService {
                 || containsOnlyTrimmableWhitespace(requestedName)) {
             return DEFAULT_NAME;
         }
+        if (DEFAULT_NAME.equals(normalize(requestedName))) {
+            return DEFAULT_NAME;
+        }
         return moderate(userId, requestedName);
     }
 
