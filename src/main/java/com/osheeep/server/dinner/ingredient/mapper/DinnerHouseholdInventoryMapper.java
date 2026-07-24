@@ -18,6 +18,23 @@ public interface DinnerHouseholdInventoryMapper
     DinnerHouseholdInventoryEntity selectByHouseholdAndIngredientForUpdate(
             Long householdId, Long ingredientId);
 
+    @Select("""
+            <script>
+            SELECT * FROM dinner_household_inventory
+            WHERE household_id = #{householdId}
+              AND ingredient_id IN
+              <foreach collection="ingredientIds" item="ingredientId"
+                       open="(" separator="," close=")">
+                #{ingredientId}
+              </foreach>
+            ORDER BY ingredient_id
+            FOR UPDATE
+            </script>
+            """)
+    List<DinnerHouseholdInventoryEntity> selectByHouseholdAndIngredientIdsForUpdate(
+            @Param("householdId") Long householdId,
+            @Param("ingredientIds") List<Long> ingredientIds);
+
     @Select("SELECT * FROM dinner_household_inventory "
             + "WHERE household_id = #{householdId} ORDER BY id FOR UPDATE")
     List<DinnerHouseholdInventoryEntity> selectAllByHouseholdIdForUpdate(

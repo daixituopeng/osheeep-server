@@ -257,7 +257,11 @@ class DinnerRecordServiceTest {
         assertThat(result.recordId()).isEqualTo(91L);
         assertThat(menu.getStatus()).isEqualTo("COMPLETED");
         assertThat(menu.getVersion()).isEqualTo(6L);
-        verify(recordMapper).insert(any(DinnerCookingRecordEntity.class));
+        ArgumentCaptor<DinnerCookingRecordEntity> insertedRecord =
+                ArgumentCaptor.forClass(DinnerCookingRecordEntity.class);
+        verify(recordMapper).insert(insertedRecord.capture());
+        assertThat(insertedRecord.getValue().getInventoryDeductionStatus())
+                .isEqualTo("PENDING");
         ArgumentCaptor<DinnerRecordDishSnapshotEntity> inserted =
                 ArgumentCaptor.forClass(DinnerRecordDishSnapshotEntity.class);
         verify(snapshotMapper, times(2)).insert(inserted.capture());

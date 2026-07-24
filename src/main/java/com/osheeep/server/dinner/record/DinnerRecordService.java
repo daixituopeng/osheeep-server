@@ -168,6 +168,7 @@ public class DinnerRecordService {
         record.setRecordDate(menu.getMenuDate());
         record.setCompletedBy(userId);
         record.setCompletedAt(now);
+        record.setInventoryDeductionStatus("PENDING");
         requireVisibleRecord(access, record);
         try {
             recordMapper.insert(record);

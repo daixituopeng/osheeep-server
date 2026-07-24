@@ -61,6 +61,10 @@ public enum ErrorCode {
     DINNER_INVENTORY_VERSION_CONFLICT(
             HttpStatus.CONFLICT, "Dinner inventory was updated by another member"),
     DINNER_INVENTORY_ITEM_NOT_FOUND(HttpStatus.NOT_FOUND, "Dinner inventory item was not found"),
+    DINNER_INVENTORY_DEDUCTION_INVALID(
+            HttpStatus.BAD_REQUEST, "Dinner inventory deduction is invalid"),
+    DINNER_INVENTORY_DEDUCTION_CONFLICT(
+            HttpStatus.CONFLICT, "Dinner inventory changed before deduction"),
     DINNER_NOTIFICATION_NOT_FOUND(HttpStatus.NOT_FOUND, "Dinner notification was not found"),
     FORBIDDEN(HttpStatus.FORBIDDEN, "Access is denied"),
     BUSINESS_ERROR(HttpStatus.CONFLICT, "Business rule violation"),

@@ -344,6 +344,8 @@ All menu and record endpoints require a bearer token and an `ACTIVE` household m
 | POST   | `/api/dinner/menus/today/complete`   | `version`, UUID v4 `idempotencyKey` | `recordId` and completed menu    |
 | GET    | `/api/dinner/records`                | None                                | Completed record summaries       |
 | GET    | `/api/dinner/records/{id}`           | None                                | Record detail and dish snapshots |
+| GET    | `/api/dinner/records/{id}/inventory-deduction` | None                     | Record-scoped deduction state and proposal |
+| POST   | `/api/dinner/records/{id}/inventory-deduction` | `action`, UUID v4 `idempotencyKey`, `items` | Terminal deduction result |
 
 The menu business day changes at 04:00 in the household timezone. `TodayMenuResponse` contains `id`, `menuDate`, `status`, `version`, `mySelectionCount`, `partnerSelectionCount`, `consensusCount`, `selectedRecipeIds`, merged `dishes`, confirmation/completion metadata, optional `recordId`, and `historyVisible`. A completed menu strictly before the viewer's UTC `historyVisibleFrom` is returned as `{menuDate,status:"PRE_MEMBERSHIP",historyVisible:false}` with no menu, recipe, record, dish or actor identifiers. The inclusive boundary is visible. Record list/detail apply the same UTC boundary, with stable `(completedAt,id)` ordering.
 
@@ -375,6 +377,41 @@ Completion is idempotent by both the request key and the unique menu record. Rep
 Before creating a record, completion revalidates every saved recipe/version/method identity and builds all dish snapshots. A household snapshot freezes the selected recipe scope and version, servings, default-method ID/name/cooking style and ordered steps, ordered ingredient names/quantities/units/required flags, selected users, and the approved asset's self-hosted list image URL. A system snapshot uses `scope: "SYSTEM"`, `recipeVersion: 1`, `method: null`, and freezes its ordered ingredients. Snapshot JSON is validated and encoded before the record row is inserted; any failure aborts the transaction without a partial record.
 
 `GET /api/dinner/records/{id}` is a read-only historical view. Each dish returns `recipeId`, the frozen display fields, viewer-relative `source`, `scope`, `recipeVersion`, nullable `servings`, nullable `method` with ordered steps, and ordered `ingredients`. It reads the snapshot only and does not re-resolve the live recipe, method, ingredients, or image asset, so later aggregate or approved-asset metadata changes cannot rewrite the record. A pre-V7 row is recognized as legacy only when every V7 snapshot field is empty; it is normalized on read to `scope: "SYSTEM"`, `recipeVersion: 1`, `servings: null`, `method: null`, and `ingredients: []` without mutating the stored row.
+
+### Record inventory deduction
+
+Menu completion and inventory deduction are separate idempotent actions. Completing a new menu atomically creates its immutable cooking record with deduction status `PENDING`; a failure or later choice in the deduction flow cannot roll back, recreate, or rewrite that record. Records created before V11 default to `NOT_APPLICABLE` and never receive a retroactive proposal.
+
+`GET /api/dinner/records/{id}/inventory-deduction` returns:
+
+- `recordId` and status `NOT_APPLICABLE`, `PENDING`, `APPLIED`, or `SKIPPED`;
+- nullable privacy-safe `handledBy` and UTC `handledAt` for a terminal result;
+- `proposalItems` only while pending; and
+- `appliedItems` only after an applied result.
+
+Pending proposal items are aggregated from the immutable record snapshot by ingredient ID. They contain `ingredientId`, `name`, nullable `recipeQuantity`, `recipeUnit`, `required`, nullable `inventoryQuantity`, nullable `inventoryUnit`, nullable `inventoryVersion`, nullable `suggestedQuantity`, `selectedByDefault`, and `eligibility`. Eligibility is one of `READY`, `INSUFFICIENT`, `NOT_IN_INVENTORY`, `INVENTORY_QUANTITY_UNKNOWN`, `RECIPE_QUANTITY_UNKNOWN`, or `UNIT_MISMATCH`. Only a positive, exact-unit suggestion can be submitted. Required ready items are selected by default; optional ready items are not. Insufficient positive stock suggests at most the current amount. The service does not convert units or invent a quantity for `适量`.
+
+`POST /api/dinner/records/{id}/inventory-deduction` accepts either:
+
+```json
+{
+  "action": "APPLY",
+  "idempotencyKey": "00000000-0000-4000-8000-000000000019",
+  "items": [
+    {
+      "ingredientId": 1,
+      "quantity": 2,
+      "inventoryVersion": 4
+    }
+  ]
+}
+```
+
+or `{"action":"SKIP","idempotencyKey":"...","items":[]}`. Apply requires 1–100 unique snapshot ingredients, positive quantities with at most 9 integer and 3 fraction digits, and the exact positive inventory version. The transaction follows household → record → ascending ingredient inventory lock order. It validates exact units and available quantities, updates all selected inventory rows, persists a terminal record result, and publishes the existing partner inventory notifications in the same transaction. Any failure rolls the inventory changes and terminal result back together.
+
+`APPLIED` and `SKIPPED` are terminal. Repeating a request after either terminal state returns the stored terminal result without another inventory write or notification. A missing row, changed version, insufficient current amount, lock failure, or idempotency-key race returns HTTP 409 `DINNER_INVENTORY_DEDUCTION_CONFLICT`; the client must refresh and ask for confirmation again instead of replaying automatically. Invalid actions, items, snapshot eligibility, units, or quantities return HTTP 400 `DINNER_INVENTORY_DEDUCTION_INVALID`.
+
+Flyway migration `V11__add_record_inventory_deduction.sql` adds the record status, terminal idempotency key, actor/time metadata and strict JSON result, with an enforced state check, unique key and actor foreign key. Local verification on 2026-07-24 passed the focused service/controller/codec/persistence tests and the guarded MySQL 8 migration test across fresh, production-shaped V4, and current V10 catalogs through V11. This is local evidence only; it does not imply a production migration or deployment.
 
 Example immutable household record dish:
 

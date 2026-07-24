@@ -9,6 +9,15 @@ import org.apache.ibatis.annotations.Select;
 
 @Mapper
 public interface DinnerCookingRecordMapper extends BaseMapper<DinnerCookingRecordEntity> {
+    @Select("""
+            SELECT * FROM dinner_cooking_records
+            WHERE household_id = #{householdId} AND id = #{recordId}
+            FOR UPDATE
+            """)
+    DinnerCookingRecordEntity selectByHouseholdAndIdForUpdate(
+            @Param("householdId") Long householdId,
+            @Param("recordId") Long recordId);
+
     @Select("SELECT * FROM dinner_cooking_records "
             + "WHERE household_id = #{householdId} ORDER BY id FOR UPDATE")
     List<DinnerCookingRecordEntity> selectAllByHouseholdIdForUpdate(
