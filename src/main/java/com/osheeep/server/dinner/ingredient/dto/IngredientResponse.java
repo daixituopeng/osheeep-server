@@ -4,6 +4,7 @@ public record IngredientResponse(
         Long id,
         String name,
         String category,
-        String defaultUnit
+        String defaultUnit,
+        String scope
 ) {
 }

@@ -5,6 +5,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -40,6 +41,7 @@ class DinnerIngredientControllerTest {
     @Autowired private MockMvc mockMvc;
     @Autowired private JwtService jwtService;
     @MockitoBean private DinnerIngredientService ingredientService;
+    @MockitoBean private DinnerHouseholdIngredientService householdIngredientService;
 
     private String token;
 
@@ -59,7 +61,7 @@ class DinnerIngredientControllerTest {
     @Test
     void listsIngredientsAndHouseholdInventory() throws Exception {
         when(ingredientService.listIngredients(7L)).thenReturn(List.of(
-                new IngredientResponse(3L, "鸡蛋", "蛋奶", "枚")));
+                new IngredientResponse(3L, "鸡蛋", "蛋奶", "枚", "SYSTEM")));
         when(ingredientService.listInventory(7L)).thenReturn(List.of(new InventoryItemResponse(
                 3L, "鸡蛋", "蛋奶", new BigDecimal("6.000"), "枚", 2L, 8L,
                 Instant.parse("2026-07-15T06:30:00Z"))));
@@ -72,6 +74,43 @@ class DinnerIngredientControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data[0].quantity").value(6.000))
                 .andExpect(jsonPath("$.data[0].updatedAt").value("2026-07-15T06:30:00Z"));
+    }
+
+    @Test
+    void createsHouseholdIngredientForAuthenticatedMember() throws Exception {
+        when(householdIngredientService.create(7L, "冻豆腐", "豆制品", "块"))
+                .thenReturn(new IngredientResponse(
+                        21L, "冻豆腐", "豆制品", "块", "HOUSEHOLD"));
+
+        mockMvc.perform(authenticated(post("/api/dinner/ingredients"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name": "冻豆腐",
+                                  "category": "豆制品",
+                                  "defaultUnit": "块"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.id").value(21))
+                .andExpect(jsonPath("$.data.scope").value("HOUSEHOLD"));
+    }
+
+    @Test
+    void rejectsInvalidHouseholdIngredientRequestBeforeService() throws Exception {
+        mockMvc.perform(authenticated(post("/api/dinner/ingredients"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name": " ",
+                                  "category": "",
+                                  "defaultUnit": "12345678901234567"
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"));
+
+        verifyNoInteractions(householdIngredientService);
     }
 
     @Test

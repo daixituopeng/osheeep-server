@@ -63,8 +63,8 @@ class DinnerIngredientServiceTest {
                 ingredient(4L, "HOUSEHOLD", 11L, "冻豆腐", "豆制品", "块", "ACTIVE")));
 
         assertThat(service.listIngredients(7L)).containsExactly(
-                new IngredientResponse(3L, "鸡蛋", "蛋奶", "枚"),
-                new IngredientResponse(4L, "冻豆腐", "豆制品", "块"));
+                new IngredientResponse(3L, "鸡蛋", "蛋奶", "枚", "SYSTEM"),
+                new IngredientResponse(4L, "冻豆腐", "豆制品", "块", "HOUSEHOLD"));
     }
 
     @Test

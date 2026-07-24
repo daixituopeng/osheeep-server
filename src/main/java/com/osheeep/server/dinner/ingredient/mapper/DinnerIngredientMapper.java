@@ -15,4 +15,12 @@ public interface DinnerIngredientMapper extends BaseMapper<DinnerIngredientEntit
             + "ORDER BY id FOR UPDATE")
     List<DinnerIngredientEntity> selectAllHouseholdIngredientsForUpdate(
             @Param("householdId") Long householdId);
+
+    @Select("SELECT * FROM dinner_ingredients "
+            + "WHERE status = 'ACTIVE' AND name = #{name} "
+            + "AND (scope = 'SYSTEM' OR (scope = 'HOUSEHOLD' "
+            + "AND household_id = #{householdId})) ORDER BY id")
+    List<DinnerIngredientEntity> selectActiveAccessibleByName(
+            @Param("householdId") Long householdId,
+            @Param("name") String name);
 }

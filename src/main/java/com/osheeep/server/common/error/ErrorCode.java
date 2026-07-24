@@ -51,6 +51,13 @@ public enum ErrorCode {
             "Dinner recipe moderation is temporarily unavailable"),
     DINNER_RECIPE_INVALID(HttpStatus.BAD_REQUEST, "Dinner recipe is invalid"),
     DINNER_INGREDIENT_INVALID(HttpStatus.BAD_REQUEST, "Dinner ingredient is invalid"),
+    DINNER_INGREDIENT_ALREADY_EXISTS(
+            HttpStatus.CONFLICT, "Dinner ingredient already exists"),
+    DINNER_INGREDIENT_NAME_REJECTED(
+            HttpStatus.UNPROCESSABLE_ENTITY, "Dinner ingredient name was rejected"),
+    DINNER_INGREDIENT_MODERATION_UNAVAILABLE(
+            HttpStatus.SERVICE_UNAVAILABLE,
+            "Dinner ingredient moderation is temporarily unavailable"),
     DINNER_INVENTORY_VERSION_CONFLICT(
             HttpStatus.CONFLICT, "Dinner inventory was updated by another member"),
     DINNER_INVENTORY_ITEM_NOT_FOUND(HttpStatus.NOT_FOUND, "Dinner inventory item was not found"),

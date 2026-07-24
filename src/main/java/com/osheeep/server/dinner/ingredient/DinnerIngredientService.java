@@ -196,7 +196,11 @@ public class DinnerIngredientService {
 
     private IngredientResponse toIngredientResponse(DinnerIngredientEntity ingredient) {
         return new IngredientResponse(
-                ingredient.getId(), ingredient.getName(), ingredient.getCategory(), ingredient.getDefaultUnit());
+                ingredient.getId(),
+                ingredient.getName(),
+                ingredient.getCategory(),
+                ingredient.getDefaultUnit(),
+                ingredient.getScope());
     }
 
     private InventoryItemResponse toInventoryResponse(

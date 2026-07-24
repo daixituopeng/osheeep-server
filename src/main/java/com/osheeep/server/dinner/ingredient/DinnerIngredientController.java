@@ -2,6 +2,7 @@ package com.osheeep.server.dinner.ingredient;
 
 import com.osheeep.server.common.api.ApiResponse;
 import com.osheeep.server.common.security.CurrentUser;
+import com.osheeep.server.dinner.ingredient.dto.CreateHouseholdIngredientRequest;
 import com.osheeep.server.dinner.ingredient.dto.IngredientResponse;
 import com.osheeep.server.dinner.ingredient.dto.InventoryItemResponse;
 import com.osheeep.server.dinner.ingredient.dto.UpsertInventoryItemRequest;
@@ -11,6 +12,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -22,9 +24,26 @@ import org.springframework.web.bind.annotation.RestController;
 public class DinnerIngredientController {
 
     private final DinnerIngredientService ingredientService;
+    private final DinnerHouseholdIngredientService householdIngredientService;
 
-    public DinnerIngredientController(DinnerIngredientService ingredientService) {
+    public DinnerIngredientController(
+            DinnerIngredientService ingredientService,
+            DinnerHouseholdIngredientService householdIngredientService
+    ) {
         this.ingredientService = ingredientService;
+        this.householdIngredientService = householdIngredientService;
+    }
+
+    @PostMapping("/ingredients")
+    public ApiResponse<IngredientResponse> createHouseholdIngredient(
+            @AuthenticationPrincipal CurrentUser currentUser,
+            @Valid @RequestBody CreateHouseholdIngredientRequest request
+    ) {
+        return ApiResponse.ok(householdIngredientService.create(
+                currentUser.id(),
+                request.name(),
+                request.category(),
+                request.defaultUnit()));
     }
 
     @GetMapping("/ingredients")

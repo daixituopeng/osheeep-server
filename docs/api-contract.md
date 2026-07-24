@@ -99,15 +99,26 @@ Flyway migration `V5__add_recipe_ingredients_and_household_inventory.sql` adds t
 
 All routes in this section require a bearer token. The client never supplies a household ID: the service resolves the authenticated user's `ACTIVE` membership and uses its `householdId` for catalog visibility, inventory reads/writes, and recipe matching. Ingredient, inventory and recipe discovery require a valid active household context. A user without one receives HTTP 403 with `FORBIDDEN` and message `Access is denied`.
 
-| Method | Path                                   | Request                                           | Response data                      |
-| ------ | -------------------------------------- | ------------------------------------------------- | ---------------------------------- |
-| GET    | `/api/dinner/ingredients`              | None                                              | Accessible active ingredient array |
-| GET    | `/api/dinner/inventory`                | None                                              | Current household inventory array  |
-| PUT    | `/api/dinner/inventory/{ingredientId}` | JSON body: nullable `quantity`, `unit`, `version` | Created or updated inventory item  |
-| DELETE | `/api/dinner/inventory/{ingredientId}` | Required query parameter `version`                | No data                            |
-| GET    | `/api/dinner/recipes`                  | Optional query parameters described below         | Matched visible published recipe array |
+| Method | Path                                   | Request                                           | Response data                           |
+| ------ | -------------------------------------- | ------------------------------------------------- | --------------------------------------- |
+| GET    | `/api/dinner/ingredients`              | None                                              | Accessible active ingredient array      |
+| POST   | `/api/dinner/ingredients`              | JSON body: `name`, `category`, `defaultUnit`      | Created household-scoped ingredient     |
+| GET    | `/api/dinner/inventory`                | None                                              | Current household inventory array       |
+| PUT    | `/api/dinner/inventory/{ingredientId}` | JSON body: nullable `quantity`, `unit`, `version` | Created or updated inventory item       |
+| DELETE | `/api/dinner/inventory/{ingredientId}` | Required query parameter `version`                | No data                                 |
+| GET    | `/api/dinner/recipes`                  | Optional query parameters described below         | Matched visible published recipe array  |
 
-An ingredient response contains `id`, `name`, `category`, and `defaultUnit`. The catalog contains active system ingredients plus active household-scoped ingredients belonging to the current household, ordered by ID.
+An ingredient response contains `id`, `name`, `category`, `defaultUnit`, and `scope`, where `scope` is `SYSTEM` or `HOUSEHOLD`. The catalog contains active system ingredients plus active household-scoped ingredients belonging to the current household, ordered by ID.
+
+Both active members may create a household-scoped ingredient. `POST /api/dinner/ingredients` never accepts a household ID; the write transaction locks and revalidates the actor's active household context. The request follows these rules:
+
+- `name` is Unicode NFC-normalized, trims leading/trailing Unicode whitespace, contains 1–20 code points, and rejects malformed UTF-16 plus control, format and line-separator code points.
+- `category` is one of `蔬菜`, `蛋奶`, `肉类`, `主食`, `干货`, `调味料`, `水果`, `豆制品`, `饮品`, or `其他`.
+- `defaultUnit` is one of `克`, `千克`, `毫升`, `升`, `个`, `枚`, `根`, `颗`, `片`, `块`, `盒`, `袋`, `瓶`, `罐`, `把`, `份`, `只`, or `瓣`.
+- The normalized name must pass WeChat text safety before the write transaction starts. A rejection returns HTTP 422 `DINNER_INGREDIENT_NAME_REJECTED`; missing identity or unavailable moderation returns retryable HTTP 503 `DINNER_INGREDIENT_MODERATION_UNAVAILABLE`.
+- A name already used by an active system ingredient or the current household returns HTTP 409 `DINNER_INGREDIENT_ALREADY_EXISTS`. The same stable conflict is returned for a concurrent household duplicate-key race.
+
+Creation adds the ingredient to the shared catalog but does not create an inventory row. Quantity and the selected unit are saved separately through the existing versioned inventory PUT. Household ingredients remain with the household when one member leaves and are deleted with household-owned references during household dissolution or last-member account cleanup. Task 18 intentionally does not add rename or archive endpoints.
 
 An inventory response contains `ingredientId`, `name`, `category`, nullable `quantity`, `unit`, `version`, `updatedBy`, and ISO-8601 `updatedAt`, ordered by inventory row ID. A `null` quantity means the household has the ingredient but has not confirmed its amount; it is not the same as deleting the row. `InventoryItemResponse.quantity` is serialized explicitly as JSON `null`. The `ApiResponse` wrapper's `NON_NULL` rule applies only to the wrapper's own fields and does not omit null fields from nested response records.
 
