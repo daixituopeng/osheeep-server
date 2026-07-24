@@ -175,6 +175,21 @@ class DinnerRecordSnapshotAssemblerTest {
     }
 
     @Test
+    void archivedRecipeCanCompleteTheMenuSavedImmediatelyBeforeArchival() {
+        DinnerRecipeEntity family = householdRecipe(14L, 70L, 9L, 2, 91L);
+        family.setStatus("ARCHIVED");
+        stubHouseholdAggregate(family, validIngredients(14L),
+                List.of(method(21L, 14L, "家常做法", "炒")),
+                List.of(step(301L, 21L, "翻炒", 0)),
+                Map.of(91L, approvedImage(91L)));
+
+        assertThat(assembler.assemble(70L, List.of(
+                householdSelection(14L, 7L, 8L, 21L))))
+                .singleElement()
+                .satisfies(snapshot -> assertThat(snapshot.recipeVersion()).isEqualTo(8L));
+    }
+
+    @Test
     void householdRecipeMustBelongToMenuHousehold() {
         DinnerRecipeEntity family = householdRecipe(14L, 71L, 8L, 2, 91L);
         stubHouseholdAggregate(family, validIngredients(14L),

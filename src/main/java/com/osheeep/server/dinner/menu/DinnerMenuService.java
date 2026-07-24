@@ -437,7 +437,7 @@ public class DinnerMenuService {
                 continue;
             }
             if (!"HOUSEHOLD".equals(recipe.getScope())
-                    || !"PUBLISHED".equals(recipe.getStatus())
+                    || !isMenuReadableHouseholdStatus(recipe.getStatus())
                     || !Objects.equals(recipe.getHouseholdId(), menu.getHouseholdId())
                     || recipeVersion <= 0
                     || selectedMethodIds.contains(null)
@@ -693,6 +693,10 @@ public class DinnerMenuService {
             validated.put(recipeId, new ValidatedRecipe(recipe, method));
         }
         return Map.copyOf(validated);
+    }
+
+    private boolean isMenuReadableHouseholdStatus(String status) {
+        return "PUBLISHED".equals(status) || "ARCHIVED".equals(status);
     }
 
     private Map<Long, DinnerRecipeEntity> loadRecipes(List<Long> recipeIds) {

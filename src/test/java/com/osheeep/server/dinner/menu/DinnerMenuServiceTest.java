@@ -330,6 +330,27 @@ class DinnerMenuServiceTest {
     }
 
     @Test
+    void todayKeepsAnAlreadySelectedArchivedFamilyRecipeVisible() {
+        DinnerMenuEntity menu = menu(31L);
+        DinnerRecipeEntity family = publishedHouseholdRecipe(14L, 11L, 9L, 91L);
+        family.setStatus("ARCHIVED");
+        stubTodayContext(menu);
+        when(selectionMapper.selectList(any())).thenReturn(List.of(
+                householdSelection(31L, 7L, 14L, 8L, 21L)));
+        when(recipeMapper.selectByIds(List.of(14L))).thenReturn(List.of(family));
+        when(methodMapper.selectByIds(List.of(21L)))
+                .thenReturn(List.of(method(21L, 14L, "家常做法", "炒")));
+        when(imageAssetService.findApprovedByIds(List.of(91L)))
+                .thenReturn(Map.of(91L, approvedImage(91L)));
+
+        assertThat(service.today(7L).dishes()).singleElement()
+                .satisfies(dish -> {
+                    assertThat(dish.recipeId()).isEqualTo(14L);
+                    assertThat(dish.recipeVersion()).isEqualTo(8L);
+                });
+    }
+
+    @Test
     void todayMasksCompletedMenuBeforeCurrentMembershipVisibilityWindow() {
         DinnerMenuEntity menu = menu(31L);
         menu.setStatus("COMPLETED");

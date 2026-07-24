@@ -18,12 +18,36 @@ public record RecipeDraftResponse(
         List<RecipeMethodDraftResponse> methods,
         ImageAssetResponse image,
         List<String> incompleteSteps,
-        Instant updatedAt
+        Instant updatedAt,
+        Long revisionOfRecipeId,
+        Long basePublishedVersion
 ) {
     public RecipeDraftResponse {
         ingredients = ingredients == null ? List.of() : List.copyOf(ingredients);
         methods = methods == null ? List.of() : List.copyOf(methods);
         incompleteSteps = incompleteSteps == null ? List.of() : List.copyOf(incompleteSteps);
+    }
+
+    public RecipeDraftResponse(
+            Long id,
+            String status,
+            Long version,
+            String name,
+            String category,
+            String flavor,
+            Integer servings,
+            Integer estimatedMinutes,
+            List<RecipeIngredientResponse> ingredients,
+            RecipeMethodResponse defaultMethod,
+            List<RecipeMethodDraftResponse> methods,
+            ImageAssetResponse image,
+            List<String> incompleteSteps,
+            Instant updatedAt
+    ) {
+        this(
+                id, status, version, name, category, flavor, servings, estimatedMinutes,
+                ingredients, defaultMethod, methods, image, incompleteSteps, updatedAt,
+                null, null);
     }
 
     public RecipeDraftResponse(
@@ -44,7 +68,7 @@ public record RecipeDraftResponse(
         this(
                 id, status, version, name, category, flavor, servings, estimatedMinutes,
                 ingredients, defaultMethod, legacyMethods(defaultMethod, estimatedMinutes),
-                image, incompleteSteps, updatedAt);
+                image, incompleteSteps, updatedAt, null, null);
     }
 
     private static List<RecipeMethodDraftResponse> legacyMethods(

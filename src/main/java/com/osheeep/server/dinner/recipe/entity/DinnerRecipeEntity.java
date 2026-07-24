@@ -25,8 +25,10 @@ public class DinnerRecipeEntity {
     @TableField("creator_id") private Long creatorId;
     @TableField("last_modified_by") private Long lastModifiedBy;
     @TableField("source_recipe_id") private Long sourceRecipeId;
-    @TableField("revision_of_recipe_id") private Long revisionOfRecipeId;
-    @TableField("base_published_version") private Long basePublishedVersion;
+    @TableField(value = "revision_of_recipe_id", updateStrategy = FieldStrategy.ALWAYS)
+    private Long revisionOfRecipeId;
+    @TableField(value = "base_published_version", updateStrategy = FieldStrategy.ALWAYS)
+    private Long basePublishedVersion;
     private String status;
     private Long version;
     @TableField("published_at") private LocalDateTime publishedAt;

@@ -9,6 +9,7 @@ import com.osheeep.server.dinner.moderation.DinnerTextSafetyGateway;
 import com.osheeep.server.dinner.moderation.DinnerTextSafetyResult;
 import com.osheeep.server.dinner.moderation.DinnerTextSafetyUnavailableException;
 import com.osheeep.server.dinner.recipe.dto.RecipeDraftResponse;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -18,17 +19,30 @@ public class DinnerRecipePublicationService {
     private final WechatUserIdentityMapper identityMapper;
     private final DinnerTextSafetyGateway gateway;
     private final DinnerRecipePublishTransaction transaction;
+    private final DinnerRecipeRevisionTransaction revisionTransaction;
 
+    @Autowired
     public DinnerRecipePublicationService(
             DinnerRecipePublishSnapshotLoader snapshotLoader,
             WechatUserIdentityMapper identityMapper,
             DinnerTextSafetyGateway gateway,
-            DinnerRecipePublishTransaction transaction
+            DinnerRecipePublishTransaction transaction,
+            DinnerRecipeRevisionTransaction revisionTransaction
     ) {
         this.snapshotLoader = snapshotLoader;
         this.identityMapper = identityMapper;
         this.gateway = gateway;
         this.transaction = transaction;
+        this.revisionTransaction = revisionTransaction;
+    }
+
+    DinnerRecipePublicationService(
+            DinnerRecipePublishSnapshotLoader snapshotLoader,
+            WechatUserIdentityMapper identityMapper,
+            DinnerTextSafetyGateway gateway,
+            DinnerRecipePublishTransaction transaction
+    ) {
+        this(snapshotLoader, identityMapper, gateway, transaction, null);
     }
 
     public RecipeDraftResponse publish(Long userId, Long recipeId, long expectedVersion) {
@@ -51,6 +65,12 @@ public class DinnerRecipePublicationService {
         }
         if (result != DinnerTextSafetyResult.PASS) {
             throw new BusinessException(ErrorCode.DINNER_RECIPE_MODERATION_UNAVAILABLE);
+        }
+        if (snapshot.revisionOfRecipeId() != null) {
+            if (revisionTransaction == null) {
+                throw new IllegalStateException("Revision transaction is unavailable");
+            }
+            return revisionTransaction.applyChecked(userId, recipeId, expectedVersion);
         }
         return transaction.publishChecked(userId, recipeId, expectedVersion);
     }

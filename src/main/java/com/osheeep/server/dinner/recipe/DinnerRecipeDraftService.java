@@ -140,6 +140,9 @@ public class DinnerRecipeDraftService {
     ) {
         LockedDraft lockedDraft = lockOwnedDraft(userId, recipeId, request.version());
         DinnerRecipeEntity draft = lockedDraft.draft();
+        if (draft.getRevisionOfRecipeId() != null) {
+            throw new BusinessException(ErrorCode.FORBIDDEN);
+        }
         DinnerRecipeMethodEntity method = findDefaultMethod(recipeId);
         if (method == null) {
             method = new DinnerRecipeMethodEntity();

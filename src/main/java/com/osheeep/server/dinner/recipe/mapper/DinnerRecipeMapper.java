@@ -65,6 +65,20 @@ public interface DinnerRecipeMapper extends BaseMapper<DinnerRecipeEntity> {
     List<DinnerRecipeEntity> selectByIdsForUpdate(
             @Param("recipeIds") List<Long> recipeIds);
 
+    @Select("SELECT * FROM dinner_recipes "
+            + "WHERE revision_of_recipe_id = #{publishedRecipeId} "
+            + "AND creator_id = #{creatorId} AND status = 'DRAFT' "
+            + "ORDER BY id LIMIT 1 FOR UPDATE")
+    DinnerRecipeEntity selectRevisionDraftForUpdate(
+            @Param("publishedRecipeId") Long publishedRecipeId,
+            @Param("creatorId") Long creatorId);
+
+    @Select("SELECT * FROM dinner_recipes "
+            + "WHERE revision_of_recipe_id = #{publishedRecipeId} "
+            + "AND status = 'DRAFT' ORDER BY id FOR UPDATE")
+    List<DinnerRecipeEntity> selectRevisionDraftsForUpdate(
+            @Param("publishedRecipeId") Long publishedRecipeId);
+
     @Update("UPDATE dinner_recipes "
             + "SET household_id = NULL, "
             + "source_recipe_id = #{retainedSourceRecipeId,jdbcType=BIGINT}, "

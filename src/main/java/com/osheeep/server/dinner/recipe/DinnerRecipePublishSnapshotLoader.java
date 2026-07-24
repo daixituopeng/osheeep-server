@@ -43,7 +43,8 @@ public class DinnerRecipePublishSnapshotLoader {
                 recipe.getId(), recipe.getCreatorId(), recipe.getHouseholdId(), recipe.getVersion(),
                 detail.name(), detail.category(), detail.flavor(), detail.servings(),
                 detail.estimatedMinutes(), recipe.getImageAssetId(), detail.ingredients(),
-                detail.defaultMethod(), null);
+                detail.defaultMethod(), null, recipe.getRevisionOfRecipeId(),
+                recipe.getBasePublishedVersion());
         var issues = validator.validate(snapshot);
         if (!issues.isEmpty()) {
             throw new RecipeValidationException(issues);
@@ -53,6 +54,7 @@ public class DinnerRecipePublishSnapshotLoader {
                 snapshot.recipeId(), snapshot.creatorId(), snapshot.householdId(), snapshot.version(),
                 snapshot.name(), snapshot.category(), snapshot.flavor(), snapshot.servings(),
                 snapshot.estimatedMinutes(), snapshot.imageAssetId(), snapshot.ingredients(),
-                snapshot.defaultMethod(), textBuilder.build(snapshot, detail.methods()));
+                snapshot.defaultMethod(), textBuilder.build(snapshot, detail.methods()),
+                snapshot.revisionOfRecipeId(), snapshot.basePublishedVersion());
     }
 }

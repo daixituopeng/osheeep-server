@@ -17,7 +17,9 @@ public record RecipePublishSnapshot(
         Long imageAssetId,
         List<RecipeIngredientResponse> ingredients,
         RecipeMethodResponse defaultMethod,
-        String moderationText
+        String moderationText,
+        Long revisionOfRecipeId,
+        Long basePublishedVersion
 ) {
 
     public RecipePublishSnapshot {
@@ -27,5 +29,26 @@ public record RecipePublishSnapshot(
                     defaultMethod.id(), defaultMethod.name(), defaultMethod.cookingStyle(),
                     List.copyOf(defaultMethod.steps()));
         }
+    }
+
+    public RecipePublishSnapshot(
+            Long recipeId,
+            Long creatorId,
+            Long householdId,
+            long version,
+            String name,
+            String category,
+            String flavor,
+            Integer servings,
+            Integer estimatedMinutes,
+            Long imageAssetId,
+            List<RecipeIngredientResponse> ingredients,
+            RecipeMethodResponse defaultMethod,
+            String moderationText
+    ) {
+        this(
+                recipeId, creatorId, householdId, version, name, category, flavor,
+                servings, estimatedMinutes, imageAssetId, ingredients, defaultMethod,
+                moderationText, null, null);
     }
 }

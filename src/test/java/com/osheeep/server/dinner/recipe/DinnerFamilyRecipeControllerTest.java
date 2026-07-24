@@ -62,12 +62,16 @@ class DinnerFamilyRecipeControllerTest {
     @MockitoBean private DinnerRecipeQueryService queryService;
     @MockitoBean private DinnerRecipePublicationService publicationService;
     @MockitoBean private DinnerRecipeMethodService methodService;
+    @MockitoBean private DinnerRecipeRevisionService revisionService;
+    @MockitoBean private DinnerRecipeArchiveService archiveService;
 
     private String token;
 
     @BeforeEach
     void setUp() {
-        reset(draftService, queryService, publicationService, methodService);
+        reset(
+                draftService, queryService, publicationService, methodService,
+                revisionService, archiveService);
         token = jwtService.generateToken(new CurrentUser(7L, "wx_user"));
     }
 
@@ -107,6 +111,36 @@ class DinnerFamilyRecipeControllerTest {
                         .content("{\"version\":1}"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.errorCode").value("UNAUTHORIZED"));
+        mockMvc.perform(post("/api/dinner/recipes/101/edit-drafts"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.errorCode").value("UNAUTHORIZED"));
+        mockMvc.perform(post("/api/dinner/recipes/101/archive")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"version\":1}"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.errorCode").value("UNAUTHORIZED"));
+    }
+
+    @Test
+    void revisionAndArchiveRoutesUseTheAuthenticatedActor() throws Exception {
+        when(revisionService.start(7L, 101L)).thenReturn(blankDraft());
+        when(archiveService.archive(7L, 101L, 8L))
+                .thenReturn(new RecipeDraftResponse(
+                        101L, "ARCHIVED", 9L, "番茄炒蛋", "家常菜", "酸甜",
+                        2, 15, List.of(), null, null, List.of(), null));
+
+        mockMvc.perform(authenticated(post("/api/dinner/recipes/101/edit-drafts")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("DRAFT"));
+        mockMvc.perform(authenticated(post("/api/dinner/recipes/101/archive"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"version\":8}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("ARCHIVED"))
+                .andExpect(jsonPath("$.data.version").value(9));
+
+        verify(revisionService).start(7L, 101L);
+        verify(archiveService).archive(7L, 101L, 8L);
     }
 
     @Test

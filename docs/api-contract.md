@@ -242,9 +242,11 @@ All `/api/dinner/**` routes below require a bearer token. `GET /media/recipes/**
 | PUT    | `/api/dinner/recipes/{id}/methods`        | Versioned complete active-method set     | Updated visible aggregate             |
 | PUT    | `/api/dinner/recipes/{id}/image`          | `version`, nullable `imageAssetId`        | Updated aggregate draft               |
 | POST   | `/api/dinner/recipes/{id}/publish`        | `version`                                | Published aggregate                   |
+| POST   | `/api/dinner/recipes/{id}/edit-drafts`    | None                                     | Current member's private revision     |
+| POST   | `/api/dinner/recipes/{id}/archive`        | `version`                                | Archived household aggregate          |
 | GET    | `/api/dinner/image-assets`                | Optional `query` query parameter          | Approved image metadata array         |
 
-`tab` is exactly `PUBLISHED`, `DRAFT`, or `ARCHIVED`. Draft lists contain only the current user's drafts. Published and archived lists are scoped to the current active household. A draft is visible only to its creator; before publication, the other member receives HTTP 403 even when both users belong to the same household. A published or archived recipe is visible to either active member of that household. The server derives user and household IDs from the bearer token and never trusts either value from a request body.
+`tab` is exactly `PUBLISHED`, `DRAFT`, or `ARCHIVED`. Draft lists contain only the current user's drafts, including that user's private published-recipe revisions. Published and archived lists are scoped to the current active household. A draft is visible only to its creator; before publication or application, the other member receives HTTP 403 even when both users belong to the same household. A published or archived recipe is visible to either active member of that household. The server derives user and household IDs from the bearer token and never trusts either value from a request body.
 
 Creating a draft returns version `1`. Every successful basic-info, ingredient, default-method, complete-method-set, or image write increments the aggregate version exactly once. Publication also increments once; for example, the first complete vertical slice progresses `1` (created), `2` (basic), `3` (ingredients), `4` (method), `5` (image), `6` (published). Every write must supply the exact current version. A stale version returns HTTP 409, `DINNER_RECIPE_VERSION_CONFLICT`, with message `Dinner recipe was updated elsewhere`; the server does not replay the write.
 
@@ -342,9 +344,9 @@ Default-method replacement body:
 
 The body replaces the single default method and all its steps in request order. Method name is limited to 40 characters, cooking style to 32, and the array to 12 steps. A draft may save a blank method name, blank cooking style, or incomplete step text; publication requires a nonblank method name, a nonblank cooking style, and 1-12 nonblank steps, each within the same limits and at most 160 characters per instruction.
 
-A recipe aggregate response contains `id`, `status`, `version`, nullable basic fields, `ingredients`, nullable `defaultMethod`, ordered `methods`, nullable `image`, `incompleteSteps`, and ISO-8601 `updatedAt`. Ingredient items contain `ingredientId`, `name`, nullable `quantity`, `unit`, `required`, and zero-based `sortOrder`. The backward-compatible `defaultMethod` contains `id`, `name`, `cookingStyle`, and ordered `{instruction, sortOrder}` items. Each `methods` item additionally contains `estimatedMinutes`, `defaultMethod`, `sortOrder`, and its ordered steps.
+A recipe aggregate response contains `id`, `status`, `version`, nullable basic fields, `ingredients`, nullable `defaultMethod`, ordered `methods`, nullable `image`, `incompleteSteps`, and ISO-8601 `updatedAt`. A private revision additionally exposes `revisionOfRecipeId` and `basePublishedVersion`; both are `null` for an ordinary draft or shared aggregate. Ingredient items contain `ingredientId`, `name`, nullable `quantity`, `unit`, `required`, and zero-based `sortOrder`. The backward-compatible `defaultMethod` contains `id`, `name`, `cookingStyle`, and ordered `{instruction, sortOrder}` items. Each `methods` item additionally contains `estimatedMinutes`, `defaultMethod`, `sortOrder`, and its ordered steps.
 
-Family list items contain `id`, `status`, nullable `name` and `imageUrl`, basic fields, `version`, privacy-safe `creator` and `lastModifier` actors shaped as `{kind}`, `completedStep`, and `updatedAt`. Actor `kind` uses the household relation values defined below (`ME`, current `PARTNER`, `EXITED_MEMBER`, or `DELETED_MEMBER`); creator or modifier IDs and names are never returned. List order is `updatedAt` descending, then recipe ID descending.
+Family list items contain `id`, `status`, nullable `name` and `imageUrl`, basic fields, `version`, privacy-safe `creator` and `lastModifier` actors shaped as `{kind}`, `completedStep`, `updatedAt`, and nullable `revisionOfRecipeId`. Actor `kind` uses the household relation values defined below (`ME`, current `PARTNER`, `EXITED_MEMBER`, or `DELETED_MEMBER`); creator or modifier IDs and names are never returned. List order is `updatedAt` descending, then recipe ID descending.
 
 Image search returns only `APPROVED` assets. A response item exposes:
 
@@ -377,7 +379,37 @@ The normalized moderation content contains flavor, method name, cooking style, a
 
 After moderation passes, a short transaction re-locks the recipe and active household membership, revalidates the same expected version, completeness, and approved image, then atomically sets `PUBLISHED`, `publishedAt`, last modifier, and the next version. A change during moderation therefore returns the same 409 conflict instead of publishing stale text.
 
-V7 connects valid published household recipes to discovery, tonight-menu selection, and immutable cooking-record detail. The complete-method-set route now supports adding and editing published household method variants without a new migration. Full published-recipe revision drafts, copying system recipes, and archiving remain outside these endpoints even though V6 reserves model fields/statuses for later work.
+`POST /api/dinner/recipes/{publishedId}/edit-drafts` requires a current-household
+`PUBLISHED` recipe. It creates or returns the current user's single private
+revision for that shared recipe. The revision starts at version `1`, records the
+current published version as `basePublishedVersion`, and copies basic
+information, ordered ingredients, approved image and all active methods. The two
+members may therefore have independent revisions. Revision basic information,
+ingredients and image use the existing versioned draft routes; default-method
+and complete-method-set writes are rejected because published method variants
+remain managed through the shared Task 21 route.
+
+Publishing a revision uses the existing
+`POST /api/dinner/recipes/{revisionDraftId}/publish` request. Moderation runs
+before a short transaction that locks the revision and shared recipe in ascending
+recipe-ID order. The transaction requires the exact revision version and the
+unchanged published base version, then applies basic information, ingredients
+and image to the shared recipe, synchronizes its default-method summary
+duration, increments the shared version exactly once, deletes the applied
+private revision and returns the shared aggregate. If either member or another
+route changed the shared version, the request returns
+`DINNER_RECIPE_VERSION_CONFLICT`; the private revision remains available and the
+server does not replay it.
+
+`POST /api/dinner/recipes/{publishedId}/archive` accepts `{ "version": 12 }`.
+Either current active member may archive a current-household `PUBLISHED` recipe.
+The exact version is required. The transaction sets `ARCHIVED`, records
+`archivedAt`, increments the shared version once and converts every outstanding
+private revision into an ordinary independent draft by clearing its revision
+base. Those drafts and their content remain owned by their creators and may
+later be published as new household recipes. There is no unarchive route.
+
+V7 connects valid published household recipes to discovery, tonight-menu selection, and immutable cooking-record detail. The complete-method-set route supports adding and editing published household method variants; the revision and archive routes now use V6's reserved fields and statuses without a new migration. Copying system recipes remains outside these endpoints.
 
 Flyway migration `V7__connect_household_recipes_to_menus.sql` adds `recipe_version BIGINT NOT NULL DEFAULT 1` and nullable `method_id` to `dinner_menu_selections`; `method_id` is indexed and references `dinner_recipe_methods(id)`. Existing system-recipe selections therefore normalize to recipe version `1` with no method. It also adds nullable `recipe_scope`, `recipe_version`, `servings`, `method_id`, `method_name`, `cooking_style`, `method_steps` JSON, and `ingredients` JSON columns to `dinner_record_dish_snapshots`. The snapshot `method_id` intentionally has no foreign key to the live method table. All snapshot additions are nullable so pre-V7 record rows remain readable without rewriting historical data.
 
@@ -527,7 +559,7 @@ Example immutable household record dish:
 }
 ```
 
-Invalid recipe identity or state returns HTTP 400 with `DINNER_RECIPE_INVALID` and message `Dinner recipe is invalid`. Selection rejects unknown, non-published, foreign-household, incomplete, or otherwise nonselectable recipes. Rendering a saved menu rejects a missing recipe, an invalid system identity, a null/non-positive household saved version, inconsistent identities for the same recipe, an invalid saved method association, or missing approved list-image data; it intentionally returns the positive saved household `recipeVersion` without comparing it with the live aggregate version. Completion performs the stronger immutable-record check and additionally rejects a saved household version that no longer equals the live recipe version, as well as tampered method ownership, ingredient visibility, household ownership, or snapshot data. Discovery omits invalid household catalog entries instead of returning them. Completion validates this state before record creation, and its transaction does not retain partial record or menu-completion writes on failure.
+Invalid recipe identity or state returns HTTP 400 with `DINNER_RECIPE_INVALID` and message `Dinner recipe is invalid`. New selection rejects unknown, non-published, foreign-household, incomplete, or otherwise nonselectable recipes. Rendering a previously saved menu accepts a current-household recipe that is still `PUBLISHED` or was archived after selection; it still rejects a missing recipe, an invalid system identity, a null/non-positive household saved version, inconsistent identities for the same recipe, an invalid saved method association, or missing approved list-image data, and returns the positive saved household `recipeVersion`. Completion performs the stronger immutable-record check: a published household recipe must still equal the saved version, while an archived household recipe must equal the saved version plus the single archive increment. It also rejects tampered method ownership, ingredient visibility, household ownership, or snapshot data. Discovery omits archived and invalid household catalog entries. Completion validates this state before record creation, and its transaction does not retain partial record or menu-completion writes on failure.
 
 ## Dinner Notifications
 

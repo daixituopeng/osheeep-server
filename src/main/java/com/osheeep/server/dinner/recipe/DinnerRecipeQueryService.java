@@ -191,7 +191,7 @@ public class DinnerRecipeQueryService {
                 requireActor(recipe.getCreatorId(), actors),
                 requireActor(recipe.getLastModifiedBy(), actors),
                 incomplete.isEmpty() ? "PREVIEW" : incomplete.getFirst(),
-                toInstant(recipe.getUpdatedAt()));
+                toInstant(recipe.getUpdatedAt()), recipe.getRevisionOfRecipeId());
     }
 
     private RecipeDraftResponse detailResponse(
@@ -208,7 +208,8 @@ public class DinnerRecipeQueryService {
                 defaultMethod(methods),
                 methods,
                 selectedImage(recipe, aggregate),
-                incompleteSteps(recipe, aggregate), toInstant(recipe.getUpdatedAt()));
+                incompleteSteps(recipe, aggregate), toInstant(recipe.getUpdatedAt()),
+                recipe.getRevisionOfRecipeId(), recipe.getBasePublishedVersion());
     }
 
     private List<String> incompleteSteps(

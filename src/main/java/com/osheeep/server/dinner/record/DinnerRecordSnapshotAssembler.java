@@ -309,7 +309,8 @@ public final class DinnerRecordSnapshotAssembler {
     }
 
     private void validateBasics(DinnerRecipeEntity recipe) {
-        if (!"PUBLISHED".equals(recipe.getStatus())
+        if (!("PUBLISHED".equals(recipe.getStatus())
+                || "ARCHIVED".equals(recipe.getStatus()))
                 || !StringUtils.hasText(recipe.getName())
                 || !StringUtils.hasText(recipe.getCategory())
                 || !StringUtils.hasText(recipe.getFlavor())
@@ -323,6 +324,7 @@ public final class DinnerRecordSnapshotAssembler {
             SelectionIdentity identity
     ) {
         if (!"SYSTEM".equals(recipe.getScope())
+                || !"PUBLISHED".equals(recipe.getStatus())
                 || !Objects.equals(identity.recipeVersion(), 1L)
                 || identity.methodId() != null
                 || !StringUtils.hasText(recipe.getImagePath())
@@ -340,7 +342,7 @@ public final class DinnerRecordSnapshotAssembler {
                 || !Objects.equals(recipe.getHouseholdId(), householdId)
                 || identity.recipeVersion() == null
                 || identity.recipeVersion() <= 0
-                || !Objects.equals(recipe.getVersion(), identity.recipeVersion())
+                || !matchesHouseholdSelectionVersion(recipe, identity.recipeVersion())
                 || identity.methodId() == null
                 || recipe.getImageAssetId() == null
                 || recipe.getServings() == null
@@ -348,6 +350,18 @@ public final class DinnerRecordSnapshotAssembler {
                 || recipe.getServings() > 20) {
             throw invalidRecipe();
         }
+    }
+
+    private boolean matchesHouseholdSelectionVersion(
+            DinnerRecipeEntity recipe,
+            Long selectedVersion
+    ) {
+        if ("PUBLISHED".equals(recipe.getStatus())) {
+            return Objects.equals(recipe.getVersion(), selectedVersion);
+        }
+        return "ARCHIVED".equals(recipe.getStatus())
+                && recipe.getVersion() != null
+                && Objects.equals(recipe.getVersion() - 1L, selectedVersion);
     }
 
     private boolean validQuantity(BigDecimal quantity) {

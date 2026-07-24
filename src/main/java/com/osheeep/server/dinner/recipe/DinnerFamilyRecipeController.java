@@ -2,6 +2,7 @@ package com.osheeep.server.dinner.recipe;
 
 import com.osheeep.server.common.api.ApiResponse;
 import com.osheeep.server.common.security.CurrentUser;
+import com.osheeep.server.dinner.recipe.dto.ArchiveRecipeRequest;
 import com.osheeep.server.dinner.recipe.dto.FamilyRecipeListItemResponse;
 import com.osheeep.server.dinner.recipe.dto.FamilyRecipeTab;
 import com.osheeep.server.dinner.recipe.dto.PublishRecipeRequest;
@@ -17,11 +18,11 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.bind.annotation.PutMapping;
 
 @RestController
 @RequestMapping("/api/dinner/recipes")
@@ -31,17 +32,23 @@ public class DinnerFamilyRecipeController {
     private final DinnerRecipeQueryService queryService;
     private final DinnerRecipePublicationService publicationService;
     private final DinnerRecipeMethodService methodService;
+    private final DinnerRecipeRevisionService revisionService;
+    private final DinnerRecipeArchiveService archiveService;
 
     public DinnerFamilyRecipeController(
             DinnerRecipeDraftService draftService,
             DinnerRecipeQueryService queryService,
             DinnerRecipePublicationService publicationService,
-            DinnerRecipeMethodService methodService
+            DinnerRecipeMethodService methodService,
+            DinnerRecipeRevisionService revisionService,
+            DinnerRecipeArchiveService archiveService
     ) {
         this.draftService = draftService;
         this.queryService = queryService;
         this.publicationService = publicationService;
         this.methodService = methodService;
+        this.revisionService = revisionService;
+        this.archiveService = archiveService;
     }
 
     @PostMapping("/drafts")
@@ -119,5 +126,22 @@ public class DinnerFamilyRecipeController {
             @Valid @RequestBody PublishRecipeRequest request
     ) {
         return ApiResponse.ok(publicationService.publish(currentUser.id(), id, request.version()));
+    }
+
+    @PostMapping("/{id}/edit-drafts")
+    public ApiResponse<RecipeDraftResponse> startRevision(
+            @AuthenticationPrincipal CurrentUser currentUser,
+            @PathVariable Long id
+    ) {
+        return ApiResponse.ok(revisionService.start(currentUser.id(), id));
+    }
+
+    @PostMapping("/{id}/archive")
+    public ApiResponse<RecipeDraftResponse> archive(
+            @AuthenticationPrincipal CurrentUser currentUser,
+            @PathVariable Long id,
+            @Valid @RequestBody ArchiveRecipeRequest request
+    ) {
+        return ApiResponse.ok(archiveService.archive(currentUser.id(), id, request.version()));
     }
 }

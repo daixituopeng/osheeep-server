@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -29,6 +30,7 @@ class DinnerRecipePublicationServiceTest {
     @Mock private WechatUserIdentityMapper identityMapper;
     @Mock private DinnerTextSafetyGateway gateway;
     @Mock private DinnerRecipePublishTransaction transaction;
+    @Mock private DinnerRecipeRevisionTransaction revisionTransaction;
 
     @Test
     void checksTextBeforeEnteringPublishTransaction() {
@@ -62,6 +64,26 @@ class DinnerRecipePublicationServiceTest {
                 .isInstanceOfSatisfying(BusinessException.class,
                         error -> assertThat(error.errorCode())
                                 .isEqualTo(ErrorCode.DINNER_RECIPE_CONTENT_REJECTED));
+        verifyNoInteractions(transaction);
+    }
+
+    @Test
+    void checkedRevisionUsesTheRevisionTransactionAfterModeration() {
+        DinnerRecipePublicationService service = new DinnerRecipePublicationService(
+                snapshotLoader, identityMapper, gateway, transaction, revisionTransaction);
+        RecipePublishSnapshot snapshot = new RecipePublishSnapshot(
+                201L, 7L, 70L, 4L, "新版番茄炒蛋", "家常菜", "酸甜",
+                2, 15, 9L, List.of(), null, "审核文本", 101L, 8L);
+        when(snapshotLoader.loadForModeration(7L, 201L, 4L)).thenReturn(snapshot);
+        when(identityMapper.selectOne(any())).thenReturn(identity());
+        when(gateway.check("openid-7", snapshot.name(), snapshot.moderationText()))
+                .thenReturn(DinnerTextSafetyResult.PASS);
+        when(revisionTransaction.applyChecked(7L, 201L, 4L))
+                .thenReturn(publishedResponse());
+
+        assertThat(service.publish(7L, 201L, 4L).status()).isEqualTo("PUBLISHED");
+
+        verify(revisionTransaction).applyChecked(7L, 201L, 4L);
         verifyNoInteractions(transaction);
     }
 

@@ -144,7 +144,8 @@ public class DinnerRecipeMethodTransaction {
         }
         boolean editableStatus = "PUBLISHED".equals(recipe.getStatus())
                 || ("DRAFT".equals(recipe.getStatus())
-                && Objects.equals(userId, recipe.getCreatorId()));
+                && Objects.equals(userId, recipe.getCreatorId())
+                && recipe.getRevisionOfRecipeId() == null);
         if (!editableStatus || !Objects.equals(access.householdId(), recipe.getHouseholdId())) {
             throw new BusinessException(ErrorCode.FORBIDDEN);
         }
