@@ -11,7 +11,10 @@ import com.osheeep.server.TestUserMapperConfig;
 import com.osheeep.server.common.security.CurrentUser;
 import com.osheeep.server.common.security.JwtService;
 import com.osheeep.server.dinner.recipe.dto.RecipeIngredientResponse;
+import com.osheeep.server.dinner.recipe.dto.RecipeDetailResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeMatchResponse;
+import com.osheeep.server.dinner.recipe.dto.RecipeMethodOptionResponse;
+import com.osheeep.server.dinner.recipe.dto.RecipeMethodStepResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeMethodSummaryResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeResponse;
 import java.math.BigDecimal;
@@ -95,6 +98,35 @@ class DinnerRecipeControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data").isArray());
         verify(recipeService).discover(7L, Set.of(101L, 102L), Set.of(103L), true);
+    }
+
+    @Test
+    void returnsTheConsumerRecipeDetailWithAllMethods() throws Exception {
+        RecipeDetailResponse detail = new RecipeDetailResponse(
+                14L, "番茄炒蛋", "/assets/recipes/tomato-eggs.jpg",
+                "家常菜", "酸甜", 2, 10, "HOUSEHOLD", 8L,
+                List.of(new RecipeIngredientResponse(
+                        101L, "番茄", new BigDecimal("2"), "个", true, 0)),
+                new RecipeMatchResponse(
+                        "AVAILABLE", 1, 1, 100, List.of(), List.of()),
+                List.of(
+                        new RecipeMethodOptionResponse(
+                                21L, "家常做法", "炒", 10, true,
+                                List.of(new RecipeMethodStepResponse("翻炒", 0))),
+                        new RecipeMethodOptionResponse(
+                                22L, "少油版", "煎", 12, false,
+                                List.of(new RecipeMethodStepResponse("慢煎", 0)))));
+        when(recipeService.detail(7L, 14L)).thenReturn(detail);
+
+        mockMvc.perform(authenticated(get("/api/dinner/recipes/14/view")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.id").value(14))
+                .andExpect(jsonPath("$.data.servings").value(2))
+                .andExpect(jsonPath("$.data.methods[0].defaultMethod").value(true))
+                .andExpect(jsonPath("$.data.methods[0].steps[0].instruction")
+                        .value("翻炒"))
+                .andExpect(jsonPath("$.data.methods[1].name").value("少油版"));
+        verify(recipeService).detail(7L, 14L);
     }
 
     private RecipeResponse response() {

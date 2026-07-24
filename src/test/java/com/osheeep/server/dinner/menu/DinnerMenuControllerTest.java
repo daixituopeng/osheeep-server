@@ -17,6 +17,8 @@ import com.osheeep.server.common.security.JwtService;
 import com.osheeep.server.dinner.household.dto.HouseholdActorResponse;
 import com.osheeep.server.dinner.menu.dto.TodayMenuResponse;
 import com.osheeep.server.dinner.menu.dto.MenuDishResponse;
+import com.osheeep.server.dinner.menu.dto.MenuMethodResolutionRequest;
+import com.osheeep.server.dinner.menu.dto.MenuSelectionRequest;
 import com.osheeep.server.dinner.recipe.DinnerRecipeService;
 import com.osheeep.server.dinner.recipe.dto.RecipeMethodSummaryResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeResponse;
@@ -149,6 +151,42 @@ class DinnerMenuControllerTest {
                         .content("{\"version\":6,\"idempotencyKey\":\"00000000-0000-4000-8000-000000000022\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.recordId").value(91));
+    }
+
+    @Test
+    void savesExplicitMethodsAndConfirmsWithConflictResolutions() throws Exception {
+        when(menuService.updateMethodSelections(
+                7L, List.of(new MenuSelectionRequest(14L, 22L)), 4L))
+                .thenReturn(today("DRAFT", 5L, null));
+        when(menuService.confirm(
+                7L, 5L, "00000000-0000-4000-8000-000000000025",
+                List.of(new MenuMethodResolutionRequest(14L, 22L))))
+                .thenReturn(today("CONFIRMED", 6L, null));
+
+        mockMvc.perform(authenticated(put("/api/dinner/menus/today/selections"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"selections":[{"recipeId":14,"methodId":22}],"version":4}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.version").value(5));
+        verify(menuService).updateMethodSelections(
+                7L, List.of(new MenuSelectionRequest(14L, 22L)), 4L);
+
+        mockMvc.perform(authenticated(post("/api/dinner/menus/today/confirm"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "version":5,
+                                  "idempotencyKey":"00000000-0000-4000-8000-000000000025",
+                                  "methodResolutions":[{"recipeId":14,"methodId":22}]
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.status").value("CONFIRMED"));
+        verify(menuService).confirm(
+                7L, 5L, "00000000-0000-4000-8000-000000000025",
+                List.of(new MenuMethodResolutionRequest(14L, 22L)));
     }
 
     @Test

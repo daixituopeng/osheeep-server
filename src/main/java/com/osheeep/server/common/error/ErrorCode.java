@@ -36,6 +36,10 @@ public enum ErrorCode {
             HttpStatus.CONFLICT, "Household operation key was already used differently"),
     DINNER_MENU_EMPTY(HttpStatus.BAD_REQUEST, "Dinner menu must contain at least one recipe"),
     DINNER_MENU_VERSION_CONFLICT(HttpStatus.CONFLICT, "Dinner menu was updated by another member"),
+    DINNER_MENU_METHOD_RESOLUTION_REQUIRED(
+            HttpStatus.CONFLICT, "Dinner menu contains unresolved cooking methods"),
+    DINNER_MENU_METHOD_RESOLUTION_INVALID(
+            HttpStatus.BAD_REQUEST, "Dinner menu cooking method resolution is invalid"),
     DINNER_MENU_NOT_CONFIRMED(HttpStatus.CONFLICT, "Dinner menu must be confirmed before completion"),
     DINNER_MENU_COMPLETED(HttpStatus.CONFLICT, "Dinner menu is already completed"),
     DINNER_RECIPE_NOT_FOUND(HttpStatus.NOT_FOUND, "Dinner recipe was not found"),

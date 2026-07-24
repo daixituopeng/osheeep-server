@@ -15,9 +15,33 @@ public record MenuDishResponse(
         List<HouseholdActorResponse> selectedBy,
         String scope,
         Long recipeVersion,
-        RecipeMethodSummaryResponse method
+        RecipeMethodSummaryResponse method,
+        List<MenuMethodChoiceResponse> methodChoices,
+        boolean methodConflict
 ) {
     public MenuDishResponse {
         selectedBy = List.copyOf(selectedBy);
+        methodChoices = List.copyOf(methodChoices);
+    }
+
+    public MenuDishResponse(
+            Long recipeId,
+            String name,
+            String imagePath,
+            String category,
+            String flavor,
+            Integer estimatedMinutes,
+            String source,
+            List<HouseholdActorResponse> selectedBy,
+            String scope,
+            Long recipeVersion,
+            RecipeMethodSummaryResponse method
+    ) {
+        this(recipeId, name, imagePath, category, flavor, estimatedMinutes, source,
+                selectedBy, scope, recipeVersion, method,
+                method == null
+                        ? List.of()
+                        : List.of(new MenuMethodChoiceResponse(method, selectedBy)),
+                false);
     }
 }

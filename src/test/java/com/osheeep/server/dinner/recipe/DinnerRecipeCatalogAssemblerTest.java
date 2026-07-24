@@ -67,11 +67,20 @@ class DinnerRecipeCatalogAssemblerTest {
                 ingredient(1L, 101L, "鸡蛋", true, 0),
                 ingredient(14L, 101L, "番茄", true, 0,
                         "HOUSEHOLD", 70L, "ACTIVE")));
+        DinnerRecipeMethodEntity defaultMethod =
+                method(21L, 14L, "家常做法", "炒");
+        defaultMethod.setEstimatedMinutes(10);
+        DinnerRecipeMethodEntity alternateMethod =
+                method(22L, 14L, "少油版", "煎");
+        alternateMethod.setIsDefault(false);
+        alternateMethod.setSortOrder(1);
+        alternateMethod.setEstimatedMinutes(12);
         when(methodMapper.selectList(any())).thenReturn(List.of(
-                method(21L, 14L, "家常做法", "炒")));
+                defaultMethod, alternateMethod));
         when(stepMapper.selectList(any())).thenReturn(List.of(
                 step(22L, 21L, "盛盘", 1),
-                step(21L, 21L, "翻炒", 0)));
+                step(21L, 21L, "翻炒", 0),
+                step(23L, 22L, "小火慢煎", 0)));
         when(imageAssetService.findApprovedByIds(List.of(91L))).thenReturn(Map.of(
                 91L, approvedImage(91L)));
 
@@ -83,6 +92,14 @@ class DinnerRecipeCatalogAssemblerTest {
                 .isEqualTo("https://www.osheeep.com/media/recipes/tomato-with-egg-list.webp");
         assertThat(entries.get(14L).defaultMethod())
                 .isEqualTo(new RecipeMethodSummaryResponse(21L, "家常做法", "炒"));
+        assertThat(entries.get(14L).methods())
+                .extracting(method -> method.name())
+                .containsExactly("家常做法", "少油版");
+        assertThat(entries.get(14L).methods().getFirst().defaultMethod()).isTrue();
+        assertThat(entries.get(14L).methods().get(1).estimatedMinutes()).isEqualTo(12);
+        assertThat(entries.get(14L).methods().get(1).steps())
+                .extracting(step -> step.instruction())
+                .containsExactly("小火慢煎");
         assertThat(entries.get(14L).ingredients())
                 .extracting(RecipeIngredientResponse::sortOrder)
                 .containsExactly(0, 1);

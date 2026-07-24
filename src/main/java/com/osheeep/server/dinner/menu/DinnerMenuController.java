@@ -1,7 +1,10 @@
 package com.osheeep.server.dinner.menu;
 
 import com.osheeep.server.common.api.ApiResponse;
+import com.osheeep.server.common.error.BusinessException;
+import com.osheeep.server.common.error.ErrorCode;
 import com.osheeep.server.common.security.CurrentUser;
+import com.osheeep.server.dinner.menu.dto.ConfirmMenuRequest;
 import com.osheeep.server.dinner.menu.dto.MenuActionRequest;
 import com.osheeep.server.dinner.menu.dto.TodayMenuResponse;
 import com.osheeep.server.dinner.menu.dto.UpdateSelectionsRequest;
@@ -38,6 +41,13 @@ public class DinnerMenuController {
             @AuthenticationPrincipal CurrentUser currentUser,
             @Valid @RequestBody UpdateSelectionsRequest request
     ) {
+        if ((request.recipeIds() == null) == (request.selections() == null)) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR);
+        }
+        if (request.selections() != null) {
+            return ApiResponse.ok(menuService.updateMethodSelections(
+                    currentUser.id(), request.selections(), request.version()));
+        }
         return ApiResponse.ok(menuService.updateSelections(
                 currentUser.id(), request.recipeIds(), request.version()));
     }
@@ -45,10 +55,15 @@ public class DinnerMenuController {
     @PostMapping("/confirm")
     public ApiResponse<TodayMenuResponse> confirm(
             @AuthenticationPrincipal CurrentUser currentUser,
-            @Valid @RequestBody MenuActionRequest request
+            @Valid @RequestBody ConfirmMenuRequest request
     ) {
+        if (request.methodResolutions().isEmpty()) {
+            return ApiResponse.ok(menuService.confirm(
+                    currentUser.id(), request.version(), request.idempotencyKey()));
+        }
         return ApiResponse.ok(menuService.confirm(
-                currentUser.id(), request.version(), request.idempotencyKey()));
+                currentUser.id(), request.version(), request.idempotencyKey(),
+                request.methodResolutions()));
     }
 
     @PostMapping("/complete")

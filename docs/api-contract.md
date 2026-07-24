@@ -107,6 +107,7 @@ All routes in this section require a bearer token. The client never supplies a h
 | PUT    | `/api/dinner/inventory/{ingredientId}` | JSON body: nullable `quantity`, `unit`, `version` | Created or updated inventory item       |
 | DELETE | `/api/dinner/inventory/{ingredientId}` | Required query parameter `version`                | No data                                 |
 | GET    | `/api/dinner/recipes`                  | Optional query parameters described below         | Matched visible published recipe array  |
+| GET    | `/api/dinner/recipes/{recipeId}/view`  | None                                              | Consumer recipe detail with all methods |
 
 An ingredient response contains `id`, `name`, `category`, `defaultUnit`, and `scope`, where `scope` is `SYSTEM` or `HOUSEHOLD`. The catalog contains active system ingredients plus active household-scoped ingredients belonging to the current household, ordered by ID.
 
@@ -183,9 +184,11 @@ Example household discovery item:
 
 Discovery includes published system recipes and valid published household recipes owned by the authenticated user's active household. A household recipe is omitted if its publishable aggregate has become invalid, if its required ingredient visibility is invalid, if it does not have exactly one valid active default method, or if its selected approved image cannot provide a self-hosted list URL. Drafts, archived recipes, and recipes from other households are never returned.
 
+`GET /api/dinner/recipes/{recipeId}/view` applies the same published-system/current-household visibility boundary and returns `DINNER_RECIPE_NOT_FOUND` for a missing or invisible recipe. A visible recipe whose aggregate is no longer valid returns `DINNER_RECIPE_INVALID`. The detail contains the discovery identity, ordered ingredients and current inventory match, plus nullable `servings` and every active method ordered by default status and method ID. Each method contains `id`, `name`, `cookingStyle`, nullable `estimatedMinutes`, `defaultMethod`, and ordered `steps` with `instruction` and `sortOrder`. A valid household detail has exactly one active default method; system recipes may have no method.
+
 Only required ingredients contribute to matching. Missing stock, insufficient known quantity, or a unit mismatch is `MISSING`. When matching-unit stock is present, a `null` recipe requirement quantity, a `null` stock quantity, or both contributes to `matchedRequired` but produces `UNKNOWN_QUANTITY` and lists the ingredient in `unknownQuantityIngredients`. Complete required stock with both quantities known is `AVAILABLE`. Optional ingredients remain ignored. A recipe with only optional ingredients, or otherwise zero required ingredients, is `AVAILABLE` with `matchedRequired: 0`, `totalRequired: 0`, `matchPercent: 100`, `missingIngredients: []`, and `unknownQuantityIngredients: []`. Recipes are ordered by status (`AVAILABLE`, `UNKNOWN_QUANTITY`, `MISSING`), then descending `matchPercent`, ascending `estimatedMinutes` with unknown duration last, and finally ascending recipe ID.
 
-This remains backward compatible at the request boundary: `GET /api/dinner/recipes` keeps the same authenticated route, all query parameters default to the old no-filter call, and no original recipe response field was removed. `PUT /api/dinner/menus/today/selections` also keeps exactly the existing `{recipeIds, version}` request body; recipe scope, selected recipe version, and selected default-method identity are derived and persisted by the server rather than accepted from the client.
+This remains backward compatible at the request boundary: `GET /api/dinner/recipes` keeps the same authenticated route, all query parameters default to the old no-filter call, and no original recipe response field was removed. `PUT /api/dinner/menus/today/selections` continues to accept the legacy `{recipeIds, version}` body and resolves each household recipe to its active default method. Method-aware clients send `{selections:[{recipeId,methodId}],version}` instead; recipe scope, selected recipe version, method ownership and active status are always validated by the server.
 
 ## Household Custom Recipe Vertical Slice
 
@@ -338,12 +341,12 @@ All menu and record endpoints require a bearer token and an `ACTIVE` household m
 
 | Method | Path                                 | Request body                        | Response data                    |
 | ------ | ------------------------------------ | ----------------------------------- | -------------------------------- |
-| GET    | `/api/dinner/menus/today`            | None                                | Today's merged menu              |
-| PUT    | `/api/dinner/menus/today/selections` | `recipeIds`, `version`              | Updated merged menu              |
-| POST   | `/api/dinner/menus/today/confirm`    | `version`, UUID v4 `idempotencyKey` | Confirmed menu                   |
-| POST   | `/api/dinner/menus/today/complete`   | `version`, UUID v4 `idempotencyKey` | `recordId` and completed menu    |
-| GET    | `/api/dinner/records`                | None                                | Completed record summaries       |
-| GET    | `/api/dinner/records/{id}`           | None                                | Record detail and dish snapshots |
+| GET    | `/api/dinner/menus/today`            | None                                                     | Today's merged menu              |
+| PUT    | `/api/dinner/menus/today/selections` | `recipeIds` or method-aware `selections`, plus `version` | Updated merged menu              |
+| POST   | `/api/dinner/menus/today/confirm`    | `version`, UUID v4 `idempotencyKey`, `methodResolutions` | Confirmed menu                   |
+| POST   | `/api/dinner/menus/today/complete`   | `version`, UUID v4 `idempotencyKey`                      | `recordId` and completed menu    |
+| GET    | `/api/dinner/records`                | None                                                     | Completed record summaries       |
+| GET    | `/api/dinner/records/{id}`           | None                                                     | Record detail and dish snapshots |
 | GET    | `/api/dinner/records/{id}/inventory-deduction` | None                     | Record-scoped deduction state and proposal |
 | POST   | `/api/dinner/records/{id}/inventory-deduction` | `action`, UUID v4 `idempotencyKey`, `items` | Terminal deduction result |
 
@@ -351,7 +354,7 @@ The menu business day changes at 04:00 in the household timezone. `TodayMenuResp
 
 Actors are privacy-safe objects `{kind}`. `kind` is `ME`, current `PARTNER`, `EXITED_MEMBER`, or `DELETED_MEMBER`; arrays are deduplicated by internal user identity and emitted in that relation order. Today-menu `confirmedBy`/`completedBy`, record `completedBy`, and each menu/record dish's `selectedBy` use this shape. `source` remains `ME`, `PARTNER`, or `BOTH` only when those current-member combinations apply; historical combinations rely on `selectedBy`. No wire response exposes actor user IDs, deleted usernames, or a raw-name fallback.
 
-Each merged menu dish contains `recipeId`, `name`, `imagePath`, `category`, `flavor`, `estimatedMinutes`, `source`, `selectedBy`, `scope`, `recipeVersion`, and nullable `method`. The `method` field is the selected default-method summary `{id, name, cookingStyle}`. When selections are replaced, the server validates every recipe and persists its identity in `dinner_menu_selections`: a system recipe is saved and returned with `scope: "SYSTEM"`, `recipeVersion: 1`, and `method: null`; a household recipe is saved with its current positive aggregate version and active default-method ID, then returned with `scope: "HOUSEHOLD"`, that saved `recipeVersion`, and the corresponding nonblank method summary. If both members select the same recipe, their saved version and method identities must agree.
+Each merged menu dish contains `recipeId`, `name`, `imagePath`, `category`, `flavor`, `estimatedMinutes`, `source`, `selectedBy`, `scope`, `recipeVersion`, nullable `method`, `methodChoices`, and `methodConflict`. A method choice is `{method,selectedBy}` and preserves the privacy-safe actors who selected that active method. `method` is the single effective `{id,name,cookingStyle}` summary when all selectors agree or after confirmation resolves a conflict; `methodConflict` is true when the two members selected different active methods. A system recipe is saved and returned with `scope: "SYSTEM"`, `recipeVersion: 1`, `method: null`, an empty `methodChoices` array and no conflict. A household recipe is saved with its current positive aggregate version and an explicitly selected active method, or the active default method for a legacy request.
 
 Example merged household menu dish:
 
@@ -370,11 +373,41 @@ Example merged household menu dish:
 }
 ```
 
-Selection updates replace only the current member's complete selection set. The request remains `{recipeIds, version}`; clients do not send scope, recipe version, or method ID. Every write compares the menu `version`; stale writes return HTTP 409 with `DINNER_MENU_VERSION_CONFLICT`. Confirming an empty menu returns `DINNER_MENU_EMPTY`. Updating a completed menu returns `DINNER_MENU_COMPLETED`, and completing a menu that is not confirmed returns `DINNER_MENU_NOT_CONFIRMED`.
+Selection updates replace only the current member's complete selection set. A request must use exactly one of:
+
+```json
+{ "recipeIds": [14, 18], "version": 5 }
+```
+
+or:
+
+```json
+{
+  "selections": [
+    { "recipeId": 14, "methodId": 22 },
+    { "recipeId": 18, "methodId": null }
+  ],
+  "version": 5
+}
+```
+
+The method-aware form requires an active method belonging to each household recipe; a system recipe uses `methodId: null`. Clients never send recipe scope, recipe version or household identity. Every write compares the menu `version`; stale writes return HTTP 409 with `DINNER_MENU_VERSION_CONFLICT`.
+
+If both members selected the same recipe with different methods, confirmation must contain exactly one `{recipeId,methodId}` resolution for every conflicting dish and no extra resolution:
+
+```json
+{
+  "version": 7,
+  "idempotencyKey": "00000000-0000-4000-8000-000000000020",
+  "methodResolutions": [{ "recipeId": 14, "methodId": 22 }]
+}
+```
+
+The chosen method must be one of the methods actually selected for that recipe. Missing resolutions return HTTP 409 `DINNER_MENU_METHOD_RESOLUTION_REQUIRED`; duplicates, extra recipes or unselected methods return HTTP 400 `DINNER_MENU_METHOD_RESOLUTION_INVALID`. The service applies all exact resolutions and confirmation in one transaction. Confirming an empty menu returns `DINNER_MENU_EMPTY`. Updating a completed menu returns `DINNER_MENU_COMPLETED`, and completing a menu that is not confirmed returns `DINNER_MENU_NOT_CONFIRMED`.
 
 Completion is idempotent by both the request key and the unique menu record. Repeated completion returns the existing record and never creates duplicate snapshots.
 
-Before creating a record, completion revalidates every saved recipe/version/method identity and builds all dish snapshots. A household snapshot freezes the selected recipe scope and version, servings, default-method ID/name/cooking style and ordered steps, ordered ingredient names/quantities/units/required flags, selected users, and the approved asset's self-hosted list image URL. A system snapshot uses `scope: "SYSTEM"`, `recipeVersion: 1`, `method: null`, and freezes its ordered ingredients. Snapshot JSON is validated and encoded before the record row is inserted; any failure aborts the transaction without a partial record.
+Before creating a record, completion revalidates every saved recipe/version/method identity and builds all dish snapshots. A household snapshot freezes the selected recipe scope and version, servings, final selected method ID/name/cooking style and ordered steps, ordered ingredient names/quantities/units/required flags, selected users, and the approved asset's self-hosted list image URL. A system snapshot uses `scope: "SYSTEM"`, `recipeVersion: 1`, `method: null`, and freezes its ordered ingredients. Snapshot JSON is validated and encoded before the record row is inserted; any failure aborts the transaction without a partial record.
 
 `GET /api/dinner/records/{id}` is a read-only historical view. Each dish returns `recipeId`, the frozen display fields, viewer-relative `source`, `scope`, `recipeVersion`, nullable `servings`, nullable `method` with ordered steps, and ordered `ingredients`. It reads the snapshot only and does not re-resolve the live recipe, method, ingredients, or image asset, so later aggregate or approved-asset metadata changes cannot rewrite the record. A pre-V7 row is recognized as legacy only when every V7 snapshot field is empty; it is normalized on read to `scope: "SYSTEM"`, `recipeVersion: 1`, `servings: null`, `method: null`, and `ingredients: []` without mutating the stored row.
 

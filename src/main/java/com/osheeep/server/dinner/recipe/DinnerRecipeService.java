@@ -1,6 +1,8 @@
 package com.osheeep.server.dinner.recipe;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.osheeep.server.common.error.BusinessException;
+import com.osheeep.server.common.error.ErrorCode;
 import com.osheeep.server.dinner.ingredient.entity.DinnerHouseholdInventoryEntity;
 import com.osheeep.server.dinner.ingredient.mapper.DinnerHouseholdInventoryMapper;
 import com.osheeep.server.dinner.recipe.DinnerRecipeAuthorizer.RecipeAccess;
@@ -8,6 +10,8 @@ import com.osheeep.server.dinner.recipe.DinnerRecipeCatalogAssembler.CatalogEntr
 import com.osheeep.server.dinner.recipe.RecipeMatchCalculator.Requirement;
 import com.osheeep.server.dinner.recipe.RecipeMatchCalculator.Stock;
 import com.osheeep.server.dinner.recipe.dto.RecipeIngredientResponse;
+import com.osheeep.server.dinner.recipe.dto.RecipeDetailResponse;
+import com.osheeep.server.dinner.recipe.dto.RecipeMatchResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeResponse;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeEntity;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMapper;
@@ -95,6 +99,43 @@ public class DinnerRecipeService {
                 .toList();
     }
 
+    public RecipeDetailResponse detail(Long userId, Long recipeId) {
+        RecipeAccess access = authorizer.requireMembership(userId);
+        DinnerRecipeEntity recipe = recipeMapper.selectOne(
+                Wrappers.<DinnerRecipeEntity>lambdaQuery()
+                        .eq(DinnerRecipeEntity::getId, recipeId)
+                        .eq(DinnerRecipeEntity::getStatus, "PUBLISHED")
+                        .and(visible -> visible
+                                .eq(DinnerRecipeEntity::getScope, "SYSTEM")
+                                .or(household -> household
+                                        .eq(DinnerRecipeEntity::getScope, "HOUSEHOLD")
+                                        .eq(DinnerRecipeEntity::getHouseholdId,
+                                                access.householdId())))
+                        .last("LIMIT 1"));
+        if (recipe == null) {
+            throw new BusinessException(ErrorCode.DINNER_RECIPE_NOT_FOUND);
+        }
+        CatalogEntry entry = catalogAssembler.assemble(List.of(recipe)).get(recipeId);
+        if (entry == null) {
+            throw new BusinessException(ErrorCode.DINNER_RECIPE_INVALID);
+        }
+        List<DinnerHouseholdInventoryEntity> inventory = inventoryMapper.selectList(
+                Wrappers.<DinnerHouseholdInventoryEntity>lambdaQuery()
+                        .eq(DinnerHouseholdInventoryEntity::getHouseholdId,
+                                access.householdId()));
+        Map<Long, Stock> householdStock = inventory.stream()
+                .collect(Collectors.toMap(
+                        DinnerHouseholdInventoryEntity::getIngredientId,
+                        item -> new Stock(item.getQuantity(), item.getUnit())));
+        List<RecipeIngredientResponse> ingredients = orderedIngredients(entry);
+        return new RecipeDetailResponse(
+                recipe.getId(), recipe.getName(), entry.imagePath(), recipe.getCategory(),
+                recipe.getFlavor(), recipe.getServings(), recipe.getEstimatedMinutes(),
+                recipe.getScope(), "SYSTEM".equals(recipe.getScope()) ? 1L : recipe.getVersion(),
+                ingredients, match(ingredients, householdStock, Set.of(), Set.of()),
+                entry.methods());
+    }
+
     public List<RecipeResponse> listSystemRecipes() {
         return recipeMapper.selectList(Wrappers.<DinnerRecipeEntity>lambdaQuery()
                         .eq(DinnerRecipeEntity::getScope, "SYSTEM")
@@ -112,9 +153,29 @@ public class DinnerRecipeService {
             Set<Long> excludeIngredientIds
     ) {
         DinnerRecipeEntity recipe = entry.recipe();
-        List<RecipeIngredientResponse> ingredients = entry.ingredients().stream()
+        List<RecipeIngredientResponse> ingredients = orderedIngredients(entry);
+        RecipeMatchResponse match = match(
+                ingredients, householdStock, includeIngredientIds, excludeIngredientIds);
+
+        return new RecipeResponse(
+                recipe.getId(), recipe.getName(), entry.imagePath(), recipe.getCategory(),
+                recipe.getFlavor(), recipe.getEstimatedMinutes(), recipe.getScope(),
+                "SYSTEM".equals(recipe.getScope()) ? 1L : recipe.getVersion(),
+                entry.defaultMethod(), ingredients, match);
+    }
+
+    private List<RecipeIngredientResponse> orderedIngredients(CatalogEntry entry) {
+        return entry.ingredients().stream()
                 .sorted(Comparator.comparingInt(RecipeIngredientResponse::sortOrder))
                 .toList();
+    }
+
+    private RecipeMatchResponse match(
+            List<RecipeIngredientResponse> ingredients,
+            Map<Long, Stock> householdStock,
+            Set<Long> includeIngredientIds,
+            Set<Long> excludeIngredientIds
+    ) {
         List<Requirement> requirements = ingredients.stream()
                 .map(ingredient -> new Requirement(
                         ingredient.ingredientId(), ingredient.name(), ingredient.quantity(),
@@ -128,13 +189,7 @@ public class DinnerRecipeService {
             }
         }
         excludeIngredientIds.forEach(effectiveStock::remove);
-
-        return new RecipeResponse(
-                recipe.getId(), recipe.getName(), entry.imagePath(), recipe.getCategory(),
-                recipe.getFlavor(), recipe.getEstimatedMinutes(), recipe.getScope(),
-                "SYSTEM".equals(recipe.getScope()) ? 1L : recipe.getVersion(),
-                entry.defaultMethod(), ingredients,
-                matchCalculator.calculate(requirements, effectiveStock));
+        return matchCalculator.calculate(requirements, effectiveStock);
     }
 
     private Comparator<RecipeResponse> discoveryOrder() {

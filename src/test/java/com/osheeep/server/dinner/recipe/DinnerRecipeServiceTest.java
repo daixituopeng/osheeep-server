@@ -23,6 +23,8 @@ import com.osheeep.server.dinner.ingredient.entity.DinnerHouseholdInventoryEntit
 import com.osheeep.server.dinner.ingredient.mapper.DinnerHouseholdInventoryMapper;
 import com.osheeep.server.dinner.recipe.DinnerRecipeAuthorizer.RecipeAccess;
 import com.osheeep.server.dinner.recipe.dto.RecipeIngredientResponse;
+import com.osheeep.server.dinner.recipe.dto.RecipeMethodOptionResponse;
+import com.osheeep.server.dinner.recipe.dto.RecipeMethodStepResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeMethodSummaryResponse;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeEntity;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeIngredientRow;
@@ -161,6 +163,56 @@ class DinnerRecipeServiceTest {
                 .contains("status =", "scope =", " OR ", "household_id =");
         assertThat(parameterValues(query.getValue()).values())
                 .contains("PUBLISHED", "SYSTEM", "HOUSEHOLD", 70L);
+    }
+
+    @Test
+    void detailReturnsEveryActiveMethodAndCurrentInventoryMatch() {
+        DinnerRecipeEntity family = householdRecipe(14L, 70L, 8L, 10);
+        List<RecipeIngredientResponse> ingredients = List.of(
+                new RecipeIngredientResponse(
+                        101L, "鸡蛋", new BigDecimal("2"), "枚", true, 0));
+        List<RecipeMethodOptionResponse> methods = List.of(
+                new RecipeMethodOptionResponse(
+                        21L, "家常做法", "炒", 10, true,
+                        List.of(new RecipeMethodStepResponse("翻炒至熟", 0))),
+                new RecipeMethodOptionResponse(
+                        22L, "少油版", "煎", 12, false,
+                        List.of(new RecipeMethodStepResponse("小火慢煎", 0))));
+        when(authorizer.requireMembership(7L)).thenReturn(new RecipeAccess(7L, 70L));
+        when(recipeMapper.selectOne(any())).thenReturn(family);
+        when(catalogAssembler.assemble(List.of(family))).thenReturn(Map.of(
+                14L, new DinnerRecipeCatalogAssembler.CatalogEntry(
+                        family,
+                        "https://www.osheeep.com/media/recipes/family-list.webp",
+                        ingredients,
+                        new RecipeMethodSummaryResponse(21L, "家常做法", "炒"),
+                        methods)));
+        when(inventoryMapper.selectList(any())).thenReturn(List.of(
+                stock(70L, 101L, "2", "枚")));
+
+        var result = service.detail(7L, 14L);
+
+        assertThat(result.id()).isEqualTo(14L);
+        assertThat(result.servings()).isEqualTo(2);
+        assertThat(result.match().status()).isEqualTo("AVAILABLE");
+        assertThat(result.methods()).extracting(item -> item.name())
+                .containsExactly("家常做法", "少油版");
+        assertThat(result.methods().getFirst().steps())
+                .extracting(RecipeMethodStepResponse::instruction)
+                .containsExactly("翻炒至熟");
+    }
+
+    @Test
+    void detailMasksAnInvisibleRecipeAsNotFound() {
+        when(authorizer.requireMembership(7L)).thenReturn(new RecipeAccess(7L, 70L));
+        when(recipeMapper.selectOne(any())).thenReturn(null);
+
+        assertThatThrownBy(() -> service.detail(7L, 999L))
+                .isInstanceOfSatisfying(BusinessException.class, error ->
+                        assertThat(error.errorCode()).isEqualTo(
+                                ErrorCode.DINNER_RECIPE_NOT_FOUND));
+
+        verifyNoInteractions(catalogAssembler, inventoryMapper);
     }
 
     @Test

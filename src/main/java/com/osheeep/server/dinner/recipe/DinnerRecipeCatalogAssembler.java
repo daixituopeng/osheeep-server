@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.osheeep.server.dinner.image.DinnerImageAssetService;
 import com.osheeep.server.dinner.image.dto.ImageAssetResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeIngredientResponse;
+import com.osheeep.server.dinner.recipe.dto.RecipeMethodOptionResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeMethodResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeMethodStepResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeMethodSummaryResponse;
@@ -88,7 +89,7 @@ public final class DinnerRecipeCatalogAssembler {
                             .getOrDefault(recipe.getId(), List.of()));
             if ("SYSTEM".equals(recipe.getScope())) {
                 entries.putIfAbsent(recipe.getId(), new CatalogEntry(
-                        recipe, recipe.getImagePath(), ingredients, null));
+                        recipe, recipe.getImagePath(), ingredients, null, List.of()));
                 continue;
             }
             if (!"HOUSEHOLD".equals(recipe.getScope())
@@ -176,29 +177,38 @@ public final class DinnerRecipeCatalogAssembler {
 
     private MethodData loadMethods(List<Long> householdRecipeIds) {
         if (householdRecipeIds.isEmpty()) {
-            return new MethodData(Map.of(), Set.of(), Map.of());
+            return new MethodData(Map.of(), Map.of(), Set.of(), Map.of());
         }
         List<DinnerRecipeMethodEntity> methods = methodMapper.selectList(
                 Wrappers.<DinnerRecipeMethodEntity>lambdaQuery()
                         .in(DinnerRecipeMethodEntity::getRecipeId, householdRecipeIds)
-                        .eq(DinnerRecipeMethodEntity::getIsDefault, true)
                         .eq(DinnerRecipeMethodEntity::getStatus, "ACTIVE")
                         .orderByAsc(DinnerRecipeMethodEntity::getRecipeId)
+                        .orderByDesc(DinnerRecipeMethodEntity::getIsDefault)
                         .orderByAsc(DinnerRecipeMethodEntity::getSortOrder)
                         .orderByAsc(DinnerRecipeMethodEntity::getId));
 
-        Map<Long, DinnerRecipeMethodEntity> methodsByRecipe = new LinkedHashMap<>();
+        Map<Long, List<DinnerRecipeMethodEntity>> methodsByRecipe = methods.stream()
+                .collect(Collectors.groupingBy(
+                        DinnerRecipeMethodEntity::getRecipeId,
+                        LinkedHashMap::new,
+                        Collectors.toList()));
+        Map<Long, DinnerRecipeMethodEntity> defaultsByRecipe = new LinkedHashMap<>();
         Set<Long> duplicateRecipeIds = new HashSet<>();
         for (DinnerRecipeMethodEntity method : methods) {
+            if (!Boolean.TRUE.equals(method.getIsDefault())) {
+                continue;
+            }
             DinnerRecipeMethodEntity previous =
-                    methodsByRecipe.putIfAbsent(method.getRecipeId(), method);
+                    defaultsByRecipe.putIfAbsent(method.getRecipeId(), method);
             if (previous != null) {
                 duplicateRecipeIds.add(method.getRecipeId());
             }
         }
 
         if (methods.isEmpty()) {
-            return new MethodData(methodsByRecipe, duplicateRecipeIds, Map.of());
+            return new MethodData(
+                    methodsByRecipe, defaultsByRecipe, duplicateRecipeIds, Map.of());
         }
         List<Long> methodIds = methods.stream()
                 .map(DinnerRecipeMethodEntity::getId)
@@ -219,7 +229,8 @@ public final class DinnerRecipeCatalogAssembler {
                         Collectors.mapping(step -> new RecipeMethodStepResponse(
                                         step.getInstruction(), step.getSortOrder()),
                                 Collectors.toList())));
-        return new MethodData(methodsByRecipe, duplicateRecipeIds, stepsByMethod);
+        return new MethodData(
+                methodsByRecipe, defaultsByRecipe, duplicateRecipeIds, stepsByMethod);
     }
 
     private Map<Long, ImageAssetResponse> loadImages(List<DinnerRecipeEntity> recipes) {
@@ -238,7 +249,7 @@ public final class DinnerRecipeCatalogAssembler {
             MethodData methodData,
             Map<Long, ImageAssetResponse> imagesById
     ) {
-        DinnerRecipeMethodEntity method = methodData.methodsByRecipe().get(recipe.getId());
+        DinnerRecipeMethodEntity method = methodData.defaultsByRecipe().get(recipe.getId());
         RecipeMethodResponse methodResponse = method == null ? null : new RecipeMethodResponse(
                 method.getId(), method.getName(), method.getCookingStyle(),
                 List.copyOf(methodData.stepsByMethod().getOrDefault(method.getId(), List.of())));
@@ -270,27 +281,48 @@ public final class DinnerRecipeCatalogAssembler {
                     recipe.getId(), recipe.getHouseholdId(), issueFields);
             return null;
         }
+        List<RecipeMethodOptionResponse> methods = methodData.methodsByRecipe()
+                .getOrDefault(recipe.getId(), List.of())
+                .stream()
+                .map(option -> new RecipeMethodOptionResponse(
+                        option.getId(), option.getName(), option.getCookingStyle(),
+                        option.getEstimatedMinutes(), Boolean.TRUE.equals(option.getIsDefault()),
+                        methodData.stepsByMethod().getOrDefault(option.getId(), List.of())))
+                .toList();
         return new CatalogEntry(
                 recipe,
                 image.listUrl(),
                 ingredients,
                 new RecipeMethodSummaryResponse(
-                        method.getId(), method.getName(), method.getCookingStyle()));
+                        method.getId(), method.getName(), method.getCookingStyle()),
+                methods);
     }
 
     public record CatalogEntry(
             DinnerRecipeEntity recipe,
             String imagePath,
             List<RecipeIngredientResponse> ingredients,
-            RecipeMethodSummaryResponse defaultMethod
+            RecipeMethodSummaryResponse defaultMethod,
+            List<RecipeMethodOptionResponse> methods
     ) {
         public CatalogEntry {
             ingredients = List.copyOf(ingredients);
+            methods = List.copyOf(methods);
+        }
+
+        public CatalogEntry(
+                DinnerRecipeEntity recipe,
+                String imagePath,
+                List<RecipeIngredientResponse> ingredients,
+                RecipeMethodSummaryResponse defaultMethod
+        ) {
+            this(recipe, imagePath, ingredients, defaultMethod, List.of());
         }
     }
 
     private record MethodData(
-            Map<Long, DinnerRecipeMethodEntity> methodsByRecipe,
+            Map<Long, List<DinnerRecipeMethodEntity>> methodsByRecipe,
+            Map<Long, DinnerRecipeMethodEntity> defaultsByRecipe,
             Set<Long> duplicateRecipeIds,
             Map<Long, List<RecipeMethodStepResponse>> stepsByMethod
     ) {

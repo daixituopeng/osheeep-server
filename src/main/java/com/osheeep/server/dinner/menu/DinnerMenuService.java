@@ -11,6 +11,9 @@ import com.osheeep.server.dinner.household.dto.HouseholdActorResponse;
 import com.osheeep.server.dinner.image.DinnerImageAssetService;
 import com.osheeep.server.dinner.image.dto.ImageAssetResponse;
 import com.osheeep.server.dinner.menu.dto.MenuDishResponse;
+import com.osheeep.server.dinner.menu.dto.MenuMethodChoiceResponse;
+import com.osheeep.server.dinner.menu.dto.MenuMethodResolutionRequest;
+import com.osheeep.server.dinner.menu.dto.MenuSelectionRequest;
 import com.osheeep.server.dinner.menu.dto.TodayMenuResponse;
 import com.osheeep.server.dinner.menu.entity.DinnerMenuActionEntity;
 import com.osheeep.server.dinner.menu.entity.DinnerMenuEntity;
@@ -133,32 +136,60 @@ public class DinnerMenuService {
             List<Long> requestedRecipeIds,
             long expectedVersion
     ) {
+        List<MenuSelectionRequest> requestedSelections = requestedRecipeIds == null
+                ? List.of()
+                : requestedRecipeIds.stream()
+                        .filter(Objects::nonNull)
+                        .distinct()
+                        .map(recipeId -> new MenuSelectionRequest(recipeId, null))
+                        .toList();
+        return updateMethodSelections(userId, requestedSelections, expectedVersion);
+    }
+
+    @Transactional
+    public TodayMenuResponse updateMethodSelections(
+            Long userId,
+            List<MenuSelectionRequest> requestedSelections,
+            long expectedVersion
+    ) {
         MenuContext context = lockToday(userId);
         DinnerMenuEntity menu = context.menu();
         requireVersion(menu, expectedVersion);
         requireMutable(menu);
 
-        List<Long> recipeIds = requestedRecipeIds == null
-                ? List.of()
-                : requestedRecipeIds.stream().filter(Objects::nonNull).distinct().sorted().toList();
+        List<RequestedSelection> selectionsToSave =
+                normalizeSelections(requestedSelections);
+        List<Long> recipeIds = selectionsToSave.stream()
+                .map(RequestedSelection::recipeId)
+                .toList();
         Map<Long, ValidatedRecipe> recipesById =
-                validateRecipes(recipeIds, context.access().householdId());
+                validateRecipes(selectionsToSave, context.access().householdId());
 
         List<DinnerMenuSelectionEntity> currentSelections = selections(menu.getId());
-        List<Long> currentUserRecipeIds = currentSelections.stream()
+        List<SelectionIdentityWithRecipe> currentUserSelections = currentSelections.stream()
                 .filter(selection -> userId.equals(selection.getUserId()))
-                .map(DinnerMenuSelectionEntity::getRecipeId)
-                .distinct()
-                .sorted()
+                .map(selection -> new SelectionIdentityWithRecipe(
+                        selection.getRecipeId(), selection.getRecipeVersion(),
+                        selection.getMethodId()))
+                .sorted(Comparator.comparing(SelectionIdentityWithRecipe::recipeId))
                 .toList();
-        if (currentUserRecipeIds.equals(recipeIds)) {
+        List<SelectionIdentityWithRecipe> requestedIdentities = selectionsToSave.stream()
+                .map(selection -> {
+                    ValidatedRecipe validated = recipesById.get(selection.recipeId());
+                    return new SelectionIdentityWithRecipe(
+                            selection.recipeId(), validated.selectedVersion(),
+                            validated.method() == null ? null : validated.method().id());
+                })
+                .toList();
+        if (currentUserSelections.equals(requestedIdentities)) {
             return response(context, userId);
         }
 
         selectionMapper.delete(Wrappers.<DinnerMenuSelectionEntity>lambdaQuery()
                 .eq(DinnerMenuSelectionEntity::getMenuId, menu.getId())
                 .eq(DinnerMenuSelectionEntity::getUserId, userId));
-        for (Long recipeId : recipeIds) {
+        for (RequestedSelection requested : selectionsToSave) {
+            Long recipeId = requested.recipeId();
             DinnerMenuSelectionEntity selection = new DinnerMenuSelectionEntity();
             selection.setMenuId(menu.getId());
             selection.setUserId(userId);
@@ -193,6 +224,16 @@ public class DinnerMenuService {
 
     @Transactional
     public TodayMenuResponse confirm(Long userId, long expectedVersion, String idempotencyKey) {
+        return confirm(userId, expectedVersion, idempotencyKey, List.of());
+    }
+
+    @Transactional
+    public TodayMenuResponse confirm(
+            Long userId,
+            long expectedVersion,
+            String idempotencyKey,
+            List<MenuMethodResolutionRequest> requestedResolutions
+    ) {
         MenuContext context = lockToday(userId);
         DinnerMenuEntity menu = context.menu();
         DinnerMenuActionEntity previousAction = actionMapper.selectOne(
@@ -204,12 +245,16 @@ public class DinnerMenuService {
         }
         requireVersion(menu, expectedVersion);
         requireMutable(menu);
-        if (selections(menu.getId()).isEmpty()) {
+        List<DinnerMenuSelectionEntity> currentSelections = selections(menu.getId());
+        if (currentSelections.isEmpty()) {
             throw new BusinessException(ErrorCode.DINNER_MENU_EMPTY);
         }
         if ("CONFIRMED".equals(menu.getStatus())) {
             return response(context, userId);
         }
+        resolveMethodConflicts(
+                menu.getId(), currentSelections,
+                requestedResolutions == null ? List.of() : requestedResolutions);
         menu.setStatus("CONFIRMED");
         menu.setConfirmedBy(userId);
         menu.setConfirmedAt(now());
@@ -223,6 +268,73 @@ public class DinnerMenuService {
         action.setIdempotencyKey(idempotencyKey);
         actionMapper.insert(action);
         return response(context, userId);
+    }
+
+    private void resolveMethodConflicts(
+            Long menuId,
+            List<DinnerMenuSelectionEntity> selections,
+            List<MenuMethodResolutionRequest> requestedResolutions
+    ) {
+        Map<Long, Set<Long>> conflicts = methodConflicts(selections);
+        Map<Long, Long> resolutions = new LinkedHashMap<>();
+        for (MenuMethodResolutionRequest resolution : requestedResolutions) {
+            if (resolution == null
+                    || resolution.recipeId() == null
+                    || resolution.methodId() == null
+                    || resolutions.putIfAbsent(
+                            resolution.recipeId(), resolution.methodId()) != null) {
+                throw new BusinessException(
+                        ErrorCode.DINNER_MENU_METHOD_RESOLUTION_INVALID);
+            }
+        }
+        if (!conflicts.keySet().containsAll(resolutions.keySet())) {
+            throw new BusinessException(ErrorCode.DINNER_MENU_METHOD_RESOLUTION_INVALID);
+        }
+        if (!resolutions.keySet().containsAll(conflicts.keySet())) {
+            throw new BusinessException(ErrorCode.DINNER_MENU_METHOD_RESOLUTION_REQUIRED);
+        }
+        for (Map.Entry<Long, Long> resolution : resolutions.entrySet()) {
+            if (!conflicts.get(resolution.getKey()).contains(resolution.getValue())) {
+                throw new BusinessException(
+                        ErrorCode.DINNER_MENU_METHOD_RESOLUTION_INVALID);
+            }
+            selectionMapper.update(
+                    null,
+                    Wrappers.<DinnerMenuSelectionEntity>lambdaUpdate()
+                            .eq(DinnerMenuSelectionEntity::getMenuId, menuId)
+                            .eq(DinnerMenuSelectionEntity::getRecipeId, resolution.getKey())
+                            .set(DinnerMenuSelectionEntity::getMethodId, resolution.getValue()));
+        }
+    }
+
+    private Map<Long, Set<Long>> methodConflicts(
+            List<DinnerMenuSelectionEntity> selections
+    ) {
+        Map<Long, Long> versions = new LinkedHashMap<>();
+        Map<Long, Set<Long>> methods = new LinkedHashMap<>();
+        for (DinnerMenuSelectionEntity selection : selections) {
+            if (selection.getRecipeId() == null || selection.getRecipeVersion() == null) {
+                throw invalidRecipe();
+            }
+            Long previousVersion = versions.putIfAbsent(
+                    selection.getRecipeId(), selection.getRecipeVersion());
+            if (previousVersion != null
+                    && !previousVersion.equals(selection.getRecipeVersion())) {
+                throw invalidRecipe();
+            }
+            if (selection.getMethodId() != null) {
+                methods.computeIfAbsent(
+                                selection.getRecipeId(), ignored -> new LinkedHashSet<>())
+                        .add(selection.getMethodId());
+            }
+        }
+        Map<Long, Set<Long>> conflicts = new LinkedHashMap<>();
+        methods.forEach((recipeId, methodIds) -> {
+            if (methodIds.size() > 1) {
+                conflicts.put(recipeId, Set.copyOf(methodIds));
+            }
+        });
+        return Map.copyOf(conflicts);
     }
 
     private DinnerMenuEntity createDraftLocked(Long householdId, LocalDate menuDate) {
@@ -280,19 +392,29 @@ public class DinnerMenuService {
     private TodayMenuResponse fullResponse(DinnerMenuEntity menu, Long currentUserId) {
         List<DinnerMenuSelectionEntity> selections = selections(menu.getId());
         Map<Long, Set<Long>> selectorsByRecipe = new LinkedHashMap<>();
-        Map<Long, SelectionIdentity> identitiesByRecipe = new LinkedHashMap<>();
+        Map<Long, Long> versionsByRecipe = new LinkedHashMap<>();
+        Map<Long, Map<Long, Set<Long>>> selectorsByRecipeAndMethod =
+                new LinkedHashMap<>();
         for (DinnerMenuSelectionEntity selection : selections) {
-            if (selection.getRecipeId() == null || selection.getUserId() == null) {
+            if (selection.getRecipeId() == null
+                    || selection.getUserId() == null
+                    || selection.getRecipeVersion() == null) {
                 throw invalidRecipe();
             }
-            SelectionIdentity identity = new SelectionIdentity(
-                    selection.getRecipeVersion(), selection.getMethodId());
-            SelectionIdentity previous = identitiesByRecipe.putIfAbsent(
-                    selection.getRecipeId(), identity);
-            if (previous != null && !previous.equals(identity)) {
+            Long previousVersion = versionsByRecipe.putIfAbsent(
+                    selection.getRecipeId(), selection.getRecipeVersion());
+            if (previousVersion != null
+                    && !previousVersion.equals(selection.getRecipeVersion())) {
                 throw invalidRecipe();
             }
-            selectorsByRecipe.computeIfAbsent(selection.getRecipeId(), ignored -> new LinkedHashSet<>())
+            selectorsByRecipe.computeIfAbsent(
+                            selection.getRecipeId(), ignored -> new LinkedHashSet<>())
+                    .add(selection.getUserId());
+            selectorsByRecipeAndMethod
+                    .computeIfAbsent(
+                            selection.getRecipeId(), ignored -> new LinkedHashMap<>())
+                    .computeIfAbsent(
+                            selection.getMethodId(), ignored -> new LinkedHashSet<>())
                     .add(selection.getUserId());
         }
 
@@ -302,11 +424,14 @@ public class DinnerMenuService {
         List<Long> imageAssetIds = new ArrayList<>();
         for (Long recipeId : recipeIds) {
             DinnerRecipeEntity recipe = recipesById.get(recipeId);
-            SelectionIdentity identity = identitiesByRecipe.get(recipeId);
+            Long recipeVersion = versionsByRecipe.get(recipeId);
+            Set<Long> selectedMethodIds =
+                    selectorsByRecipeAndMethod.get(recipeId).keySet();
             if ("SYSTEM".equals(recipe.getScope())) {
                 if (!"PUBLISHED".equals(recipe.getStatus())
-                        || !Objects.equals(identity.recipeVersion(), 1L)
-                        || identity.methodId() != null) {
+                        || !Objects.equals(recipeVersion, 1L)
+                        || selectedMethodIds.size() != 1
+                        || !selectedMethodIds.contains(null)) {
                     throw invalidRecipe();
                 }
                 continue;
@@ -314,13 +439,12 @@ public class DinnerMenuService {
             if (!"HOUSEHOLD".equals(recipe.getScope())
                     || !"PUBLISHED".equals(recipe.getStatus())
                     || !Objects.equals(recipe.getHouseholdId(), menu.getHouseholdId())
-                    || identity.recipeVersion() == null
-                    || identity.recipeVersion() <= 0
-                    || identity.methodId() == null
+                    || recipeVersion <= 0
+                    || selectedMethodIds.contains(null)
                     || recipe.getImageAssetId() == null) {
                 throw invalidRecipe();
             }
-            methodIds.add(identity.methodId());
+            methodIds.addAll(selectedMethodIds);
             imageAssetIds.add(recipe.getImageAssetId());
         }
 
@@ -345,7 +469,6 @@ public class DinnerMenuService {
         int consensusCount = 0;
         for (Long recipeId : recipeIds) {
             DinnerRecipeEntity recipe = recipesById.get(recipeId);
-            SelectionIdentity identity = identitiesByRecipe.get(recipeId);
             Set<Long> selectors = selectorsByRecipe.get(recipeId);
             List<HouseholdActorResponse> selectedBy =
                     actorLabelService.ordered(selectors, actors);
@@ -354,28 +477,45 @@ public class DinnerMenuService {
                 consensusCount++;
             }
             RecipeMethodSummaryResponse method = null;
+            List<MenuMethodChoiceResponse> methodChoices = List.of();
+            boolean methodConflict = false;
             String imagePath = recipe.getImagePath();
             if ("HOUSEHOLD".equals(recipe.getScope())) {
-                DinnerRecipeMethodEntity savedMethod = methodsById.get(identity.methodId());
-                if (savedMethod == null
-                        || !Objects.equals(savedMethod.getRecipeId(), recipeId)
-                        || !"ACTIVE".equals(savedMethod.getStatus())
-                        || !StringUtils.hasText(savedMethod.getName())
-                        || !StringUtils.hasText(savedMethod.getCookingStyle())) {
-                    throw invalidRecipe();
+                List<MenuMethodChoiceResponse> choices = new ArrayList<>();
+                for (Map.Entry<Long, Set<Long>> selectedMethod :
+                        selectorsByRecipeAndMethod.get(recipeId).entrySet()) {
+                    DinnerRecipeMethodEntity savedMethod =
+                            methodsById.get(selectedMethod.getKey());
+                    if (savedMethod == null
+                            || !Objects.equals(savedMethod.getRecipeId(), recipeId)
+                            || !"ACTIVE".equals(savedMethod.getStatus())
+                            || !StringUtils.hasText(savedMethod.getName())
+                            || !StringUtils.hasText(savedMethod.getCookingStyle())) {
+                        throw invalidRecipe();
+                    }
+                    RecipeMethodSummaryResponse summary =
+                            new RecipeMethodSummaryResponse(
+                                    savedMethod.getId(), savedMethod.getName(),
+                                    savedMethod.getCookingStyle());
+                    choices.add(new MenuMethodChoiceResponse(
+                            summary,
+                            actorLabelService.ordered(selectedMethod.getValue(), actors)));
                 }
+                choices.sort(Comparator.comparing(choice -> choice.method().id()));
+                methodChoices = List.copyOf(choices);
+                methodConflict = methodChoices.size() > 1;
+                method = methodConflict ? null : methodChoices.getFirst().method();
                 ImageAssetResponse image = imagesById.get(recipe.getImageAssetId());
                 if (image == null || !StringUtils.hasText(image.listUrl())) {
                     throw invalidRecipe();
                 }
-                method = new RecipeMethodSummaryResponse(
-                        savedMethod.getId(), savedMethod.getName(), savedMethod.getCookingStyle());
                 imagePath = image.listUrl();
             }
             dishes.add(new MenuDishResponse(
                     recipe.getId(), recipe.getName(), imagePath, recipe.getCategory(),
                     recipe.getFlavor(), recipe.getEstimatedMinutes(), source, selectedBy,
-                    recipe.getScope(), identity.recipeVersion(), method));
+                    recipe.getScope(), versionsByRecipe.get(recipeId), method,
+                    methodChoices, methodConflict));
         }
 
         List<Long> selectedRecipeIds = selections.stream()
@@ -471,10 +611,37 @@ public class DinnerMenuService {
         }
     }
 
+    private List<RequestedSelection> normalizeSelections(
+            List<MenuSelectionRequest> requestedSelections
+    ) {
+        if (requestedSelections == null || requestedSelections.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, RequestedSelection> unique = new LinkedHashMap<>();
+        for (MenuSelectionRequest selection : requestedSelections) {
+            if (selection == null
+                    || selection.recipeId() == null
+                    || selection.recipeId() <= 0
+                    || (selection.methodId() != null && selection.methodId() <= 0)
+                    || unique.putIfAbsent(
+                            selection.recipeId(),
+                            new RequestedSelection(
+                                    selection.recipeId(), selection.methodId())) != null) {
+                throw invalidRecipe();
+            }
+        }
+        return unique.values().stream()
+                .sorted(Comparator.comparing(RequestedSelection::recipeId))
+                .toList();
+    }
+
     private Map<Long, ValidatedRecipe> validateRecipes(
-            List<Long> recipeIds,
+            List<RequestedSelection> requestedSelections,
             Long householdId
     ) {
+        List<Long> recipeIds = requestedSelections.stream()
+                .map(RequestedSelection::recipeId)
+                .toList();
         if (recipeIds.isEmpty()) {
             return Map.of();
         }
@@ -499,12 +666,29 @@ public class DinnerMenuService {
             throw invalidRecipe();
         }
         Map<Long, ValidatedRecipe> validated = new LinkedHashMap<>();
-        for (Long recipeId : recipeIds) {
+        for (RequestedSelection requested : requestedSelections) {
+            Long recipeId = requested.recipeId();
             DinnerRecipeEntity recipe = recipesById.get(recipeId);
-            RecipeMethodSummaryResponse method = catalog.get(recipeId).defaultMethod();
-            if (("SYSTEM".equals(recipe.getScope()) && method != null)
-                    || ("HOUSEHOLD".equals(recipe.getScope()) && method == null)) {
+            DinnerRecipeCatalogAssembler.CatalogEntry entry = catalog.get(recipeId);
+            RecipeMethodSummaryResponse method = entry.defaultMethod();
+            if ("SYSTEM".equals(recipe.getScope())) {
+                if (method != null || requested.methodId() != null) {
+                    throw invalidRecipe();
+                }
+            } else if (method == null) {
                 throw invalidRecipe();
+            } else if (requested.methodId() != null) {
+                method = entry.methods().stream()
+                        .filter(option -> requested.methodId().equals(option.id()))
+                        .findFirst()
+                        .map(option -> new RecipeMethodSummaryResponse(
+                                option.id(), option.name(), option.cookingStyle()))
+                        .orElseGet(() -> requested.methodId().equals(entry.defaultMethod().id())
+                                ? entry.defaultMethod()
+                                : null);
+                if (method == null) {
+                    throw invalidRecipe();
+                }
             }
             validated.put(recipeId, new ValidatedRecipe(recipe, method));
         }
@@ -585,6 +769,13 @@ public class DinnerMenuService {
         }
     }
 
-    private record SelectionIdentity(Long recipeVersion, Long methodId) {
+    private record RequestedSelection(Long recipeId, Long methodId) {
+    }
+
+    private record SelectionIdentityWithRecipe(
+            Long recipeId,
+            Long recipeVersion,
+            Long methodId
+    ) {
     }
 }
