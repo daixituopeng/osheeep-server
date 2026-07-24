@@ -10,6 +10,7 @@ import com.osheeep.server.dinner.recipe.dto.FamilyRecipeListItemResponse;
 import com.osheeep.server.dinner.recipe.dto.FamilyRecipeTab;
 import com.osheeep.server.dinner.recipe.dto.RecipeDraftResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeIngredientResponse;
+import com.osheeep.server.dinner.recipe.dto.RecipeMethodDraftResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeMethodResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeMethodStepResponse;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeEntity;
@@ -109,7 +110,7 @@ public class DinnerRecipeQueryService {
         List<Long> recipeIds = recipes.stream().map(DinnerRecipeEntity::getId).toList();
         Map<Long, List<RecipeIngredientResponse>> ingredientsByRecipe =
                 loadIngredients(recipeIds);
-        Map<Long, RecipeMethodResponse> methodsByRecipe = loadDefaultMethods(recipeIds);
+        Map<Long, List<RecipeMethodDraftResponse>> methodsByRecipe = loadMethods(recipeIds);
         Map<Long, ImageAssetResponse> imagesById = loadImages(recipes);
         return new AggregateData(ingredientsByRecipe, methodsByRecipe, imagesById);
     }
@@ -126,11 +127,10 @@ public class DinnerRecipeQueryService {
                                 Collectors.toList())));
     }
 
-    private Map<Long, RecipeMethodResponse> loadDefaultMethods(List<Long> recipeIds) {
+    private Map<Long, List<RecipeMethodDraftResponse>> loadMethods(List<Long> recipeIds) {
         List<DinnerRecipeMethodEntity> methods = methodMapper.selectList(
                 Wrappers.<DinnerRecipeMethodEntity>lambdaQuery()
                         .in(DinnerRecipeMethodEntity::getRecipeId, recipeIds)
-                        .eq(DinnerRecipeMethodEntity::getIsDefault, true)
                         .eq(DinnerRecipeMethodEntity::getStatus, "ACTIVE")
                         .orderByAsc(DinnerRecipeMethodEntity::getRecipeId)
                         .orderByAsc(DinnerRecipeMethodEntity::getSortOrder)
@@ -153,12 +153,15 @@ public class DinnerRecipeQueryService {
                         Collectors.mapping(step -> new RecipeMethodStepResponse(
                                         step.getInstruction(), step.getSortOrder()),
                                 Collectors.toList())));
-        return methods.stream().collect(Collectors.toMap(
+        return methods.stream().collect(Collectors.groupingBy(
                 DinnerRecipeMethodEntity::getRecipeId,
-                method -> new RecipeMethodResponse(
-                        method.getId(), method.getName(), method.getCookingStyle(),
-                        stepsByMethod.getOrDefault(method.getId(), List.of())),
-                (first, ignored) -> first));
+                Collectors.mapping(method -> new RecipeMethodDraftResponse(
+                                method.getId(), method.getName(), method.getCookingStyle(),
+                                method.getEstimatedMinutes(),
+                                Boolean.TRUE.equals(method.getIsDefault()),
+                                method.getSortOrder(),
+                                stepsByMethod.getOrDefault(method.getId(), List.of())),
+                        Collectors.toList())));
     }
 
     private Map<Long, ImageAssetResponse> loadImages(List<DinnerRecipeEntity> recipes) {
@@ -195,12 +198,15 @@ public class DinnerRecipeQueryService {
             DinnerRecipeEntity recipe,
             AggregateData aggregate
     ) {
+        List<RecipeMethodDraftResponse> methods =
+                aggregate.methodsByRecipe().getOrDefault(recipe.getId(), List.of());
         return new RecipeDraftResponse(
                 recipe.getId(), recipe.getStatus(), recipe.getVersion(), recipe.getName(),
                 recipe.getCategory(), recipe.getFlavor(), recipe.getServings(),
                 recipe.getEstimatedMinutes(),
                 aggregate.ingredientsByRecipe().getOrDefault(recipe.getId(), List.of()),
-                aggregate.methodsByRecipe().get(recipe.getId()),
+                defaultMethod(methods),
+                methods,
                 selectedImage(recipe, aggregate),
                 incompleteSteps(recipe, aggregate), toInstant(recipe.getUpdatedAt()));
     }
@@ -216,7 +222,8 @@ public class DinnerRecipeQueryService {
         if (aggregate.ingredientsByRecipe().getOrDefault(recipe.getId(), List.of()).isEmpty()) {
             incomplete.add("INGREDIENTS");
         }
-        if (!methodComplete(aggregate.methodsByRecipe().get(recipe.getId()))) {
+        if (!methodComplete(defaultMethod(
+                aggregate.methodsByRecipe().getOrDefault(recipe.getId(), List.of())))) {
             incomplete.add("METHOD");
         }
         if (selectedImage(recipe, aggregate) == null) {
@@ -249,6 +256,15 @@ public class DinnerRecipeQueryService {
                         .allMatch(step -> StringUtils.hasText(step.instruction()));
     }
 
+    private RecipeMethodResponse defaultMethod(List<RecipeMethodDraftResponse> methods) {
+        return methods.stream()
+                .filter(RecipeMethodDraftResponse::defaultMethod)
+                .findFirst()
+                .map(method -> new RecipeMethodResponse(
+                        method.id(), method.name(), method.cookingStyle(), method.steps()))
+                .orElse(null);
+    }
+
     private HouseholdActorResponse requireActor(
             Long userId,
             Map<Long, HouseholdActorResponse> actors
@@ -266,7 +282,7 @@ public class DinnerRecipeQueryService {
 
     private record AggregateData(
             Map<Long, List<RecipeIngredientResponse>> ingredientsByRecipe,
-            Map<Long, RecipeMethodResponse> methodsByRecipe,
+            Map<Long, List<RecipeMethodDraftResponse>> methodsByRecipe,
             Map<Long, ImageAssetResponse> imagesById
     ) {
     }

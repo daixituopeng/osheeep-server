@@ -386,6 +386,36 @@ class DinnerRecipeQueryServiceTest {
     }
 
     @Test
+    void detailReturnsEveryActiveMethodInStableOrder() {
+        stubActiveMembership(7L, 70L);
+        DinnerRecipeEntity recipe = completeBasics(draft(101L, 7L));
+        DinnerRecipeMethodEntity first = method(201L, 101L);
+        first.setEstimatedMinutes(15);
+        DinnerRecipeMethodEntity second = method(202L, 101L);
+        second.setName("少油焖");
+        second.setCookingStyle("焖");
+        second.setEstimatedMinutes(22);
+        second.setIsDefault(false);
+        second.setSortOrder(1);
+        when(recipeMapper.selectById(101L)).thenReturn(recipe);
+        when(ingredientMapper.selectWithIngredientNames(List.of(101L))).thenReturn(List.of());
+        when(methodMapper.selectList(any())).thenReturn(List.of(first, second));
+        when(stepMapper.selectList(any())).thenReturn(List.of(
+                step(201L, "炒熟", 0),
+                step(202L, "小火焖熟", 0)));
+
+        RecipeDraftResponse result = queryService.detail(7L, 101L);
+
+        assertThat(result.methods()).extracting(item -> item.name())
+                .containsExactly("家常做法", "少油焖");
+        assertThat(result.methods()).extracting(item -> item.estimatedMinutes())
+                .containsExactly(15, 22);
+        assertThat(result.methods()).extracting(item -> item.defaultMethod())
+                .containsExactly(true, false);
+        assertThat(result.defaultMethod().id()).isEqualTo(201L);
+    }
+
+    @Test
     void detailTreatsUnresolvedSelectedImageAsIncompleteInStableOrder() {
         stubActiveMembership(7L, 70L);
         DinnerRecipeEntity recipe = completeBasics(draft(101L, 7L));

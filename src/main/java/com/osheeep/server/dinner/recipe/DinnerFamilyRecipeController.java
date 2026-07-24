@@ -7,6 +7,7 @@ import com.osheeep.server.dinner.recipe.dto.FamilyRecipeTab;
 import com.osheeep.server.dinner.recipe.dto.PublishRecipeRequest;
 import com.osheeep.server.dinner.recipe.dto.RecipeDraftResponse;
 import com.osheeep.server.dinner.recipe.dto.ReplaceRecipeIngredientsRequest;
+import com.osheeep.server.dinner.recipe.dto.ReplaceRecipeMethodsRequest;
 import com.osheeep.server.dinner.recipe.dto.SelectRecipeImageRequest;
 import com.osheeep.server.dinner.recipe.dto.UpdateDefaultMethodRequest;
 import com.osheeep.server.dinner.recipe.dto.UpdateRecipeBasicInfoRequest;
@@ -29,15 +30,18 @@ public class DinnerFamilyRecipeController {
     private final DinnerRecipeDraftService draftService;
     private final DinnerRecipeQueryService queryService;
     private final DinnerRecipePublicationService publicationService;
+    private final DinnerRecipeMethodService methodService;
 
     public DinnerFamilyRecipeController(
             DinnerRecipeDraftService draftService,
             DinnerRecipeQueryService queryService,
-            DinnerRecipePublicationService publicationService
+            DinnerRecipePublicationService publicationService,
+            DinnerRecipeMethodService methodService
     ) {
         this.draftService = draftService;
         this.queryService = queryService;
         this.publicationService = publicationService;
+        this.methodService = methodService;
     }
 
     @PostMapping("/drafts")
@@ -88,6 +92,15 @@ public class DinnerFamilyRecipeController {
             @Valid @RequestBody UpdateDefaultMethodRequest request
     ) {
         return ApiResponse.ok(draftService.updateDefaultMethod(currentUser.id(), id, request));
+    }
+
+    @PutMapping("/{id}/methods")
+    public ApiResponse<RecipeDraftResponse> replaceMethods(
+            @AuthenticationPrincipal CurrentUser currentUser,
+            @PathVariable Long id,
+            @Valid @RequestBody ReplaceRecipeMethodsRequest request
+    ) {
+        return ApiResponse.ok(methodService.replaceMethods(currentUser.id(), id, request));
     }
 
     @PutMapping("/{id}/image")

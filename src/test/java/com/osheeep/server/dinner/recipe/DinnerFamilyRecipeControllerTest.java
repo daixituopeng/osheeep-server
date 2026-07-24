@@ -23,10 +23,12 @@ import com.osheeep.server.dinner.recipe.dto.RecipeDraftResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeIngredientResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeIngredientInput;
 import com.osheeep.server.dinner.recipe.dto.RecipeMethodResponse;
+import com.osheeep.server.dinner.recipe.dto.RecipeMethodInput;
 import com.osheeep.server.dinner.recipe.dto.RecipeMethodStepInput;
 import com.osheeep.server.dinner.recipe.dto.RecipeMethodStepResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeValidationIssue;
 import com.osheeep.server.dinner.recipe.dto.ReplaceRecipeIngredientsRequest;
+import com.osheeep.server.dinner.recipe.dto.ReplaceRecipeMethodsRequest;
 import com.osheeep.server.dinner.recipe.dto.SelectRecipeImageRequest;
 import com.osheeep.server.dinner.recipe.dto.UpdateDefaultMethodRequest;
 import com.osheeep.server.dinner.recipe.dto.UpdateRecipeBasicInfoRequest;
@@ -59,12 +61,13 @@ class DinnerFamilyRecipeControllerTest {
     @MockitoBean private DinnerRecipeDraftService draftService;
     @MockitoBean private DinnerRecipeQueryService queryService;
     @MockitoBean private DinnerRecipePublicationService publicationService;
+    @MockitoBean private DinnerRecipeMethodService methodService;
 
     private String token;
 
     @BeforeEach
     void setUp() {
-        reset(draftService, queryService, publicationService);
+        reset(draftService, queryService, publicationService, methodService);
         token = jwtService.generateToken(new CurrentUser(7L, "wx_user"));
     }
 
@@ -261,6 +264,51 @@ class DinnerFamilyRecipeControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.version").value(6));
         verify(draftService).updateDefaultMethod(7L, 101L, request);
+    }
+
+    @Test
+    void methodCollectionRoutePassesOrderedVariantsAndReturnsLatestVersion() throws Exception {
+        ReplaceRecipeMethodsRequest request = new ReplaceRecipeMethodsRequest(
+                6L,
+                List.of(
+                        new RecipeMethodInput(
+                                201L, "家常炒", "炒", 15, false,
+                                List.of(new RecipeMethodStepInput("炒熟"))),
+                        new RecipeMethodInput(
+                                null, "少油焖", "焖", 22, true,
+                                List.of(new RecipeMethodStepInput("小火焖熟")))));
+        when(methodService.replaceMethods(7L, 101L, request))
+                .thenReturn(blankDraft(7L));
+
+        mockMvc.perform(authenticated(put("/api/dinner/recipes/101/methods"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"version\":6,\"methods\":["
+                                + "{\"id\":201,\"name\":\"家常炒\","
+                                + "\"cookingStyle\":\"炒\",\"estimatedMinutes\":15,"
+                                + "\"defaultMethod\":false,"
+                                + "\"steps\":[{\"instruction\":\"炒熟\"}]},"
+                                + "{\"id\":null,\"name\":\"少油焖\","
+                                + "\"cookingStyle\":\"焖\",\"estimatedMinutes\":22,"
+                                + "\"defaultMethod\":true,"
+                                + "\"steps\":[{\"instruction\":\"小火焖熟\"}]}]}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.version").value(7));
+
+        verify(methodService).replaceMethods(7L, 101L, request);
+    }
+
+    @Test
+    void methodCollectionRouteRejectsBlankAndOversizedVariants() throws Exception {
+        mockMvc.perform(authenticated(put("/api/dinner/recipes/101/methods"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"version\":1,\"methods\":[{"
+                                + "\"name\":\" \",\"cookingStyle\":\"炒\","
+                                + "\"estimatedMinutes\":15,\"defaultMethod\":true,"
+                                + "\"steps\":[]}]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"));
+
+        verifyNoInteractions(methodService);
     }
 
     @Test

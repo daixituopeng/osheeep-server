@@ -239,13 +239,59 @@ All `/api/dinner/**` routes below require a bearer token. `GET /media/recipes/**
 | PUT    | `/api/dinner/recipes/{id}/basic-info`     | Versioned basic-info body                | Updated aggregate draft               |
 | PUT    | `/api/dinner/recipes/{id}/ingredients`    | Versioned ingredient replacement         | Updated aggregate draft               |
 | PUT    | `/api/dinner/recipes/{id}/default-method` | Versioned default-method replacement     | Updated aggregate draft               |
+| PUT    | `/api/dinner/recipes/{id}/methods`        | Versioned complete active-method set     | Updated visible aggregate             |
 | PUT    | `/api/dinner/recipes/{id}/image`          | `version`, nullable `imageAssetId`        | Updated aggregate draft               |
 | POST   | `/api/dinner/recipes/{id}/publish`        | `version`                                | Published aggregate                   |
 | GET    | `/api/dinner/image-assets`                | Optional `query` query parameter          | Approved image metadata array         |
 
 `tab` is exactly `PUBLISHED`, `DRAFT`, or `ARCHIVED`. Draft lists contain only the current user's drafts. Published and archived lists are scoped to the current active household. A draft is visible only to its creator; before publication, the other member receives HTTP 403 even when both users belong to the same household. A published or archived recipe is visible to either active member of that household. The server derives user and household IDs from the bearer token and never trusts either value from a request body.
 
-Creating a draft returns version `1`. Every successful basic-info, ingredient, default-method, or image write increments the aggregate version exactly once. Publication also increments once; for example, the first complete vertical slice progresses `1` (created), `2` (basic), `3` (ingredients), `4` (method), `5` (image), `6` (published). Every write must supply the exact current version. A stale version returns HTTP 409, `DINNER_RECIPE_VERSION_CONFLICT`, with message `Dinner recipe was updated elsewhere`; the server does not replay the write.
+Creating a draft returns version `1`. Every successful basic-info, ingredient, default-method, complete-method-set, or image write increments the aggregate version exactly once. Publication also increments once; for example, the first complete vertical slice progresses `1` (created), `2` (basic), `3` (ingredients), `4` (method), `5` (image), `6` (published). Every write must supply the exact current version. A stale version returns HTTP 409, `DINNER_RECIPE_VERSION_CONFLICT`, with message `Dinner recipe was updated elsewhere`; the server does not replay the write.
+
+`PUT /api/dinner/recipes/{id}/methods` accepts the complete ordered active-method set:
+
+```json
+{
+  "version": 8,
+  "methods": [
+    {
+      "id": 201,
+      "name": "家常炒",
+      "cookingStyle": "炒",
+      "estimatedMinutes": 15,
+      "defaultMethod": true,
+      "steps": [{ "instruction": "热锅炒熟" }]
+    },
+    {
+      "id": null,
+      "name": "少油焖",
+      "cookingStyle": "焖",
+      "estimatedMinutes": 22,
+      "defaultMethod": false,
+      "steps": [{ "instruction": "小火焖熟" }]
+    }
+  ]
+}
+```
+
+The list contains 1–8 methods in display order and exactly one default. Names
+are required, trimmed, case-insensitively unique, and at most 40 characters;
+`cookingStyle` is required and at most 32 characters; duration is 1–1440
+minutes; each method contains 1–12 nonblank steps of at most 160 characters.
+An existing method ID must be active and belong to the same recipe. Every
+currently active method ID must remain in the request: this first version adds,
+edits, reorders and changes the default but deliberately does not delete a
+method that may already be referenced by a menu.
+
+The draft creator may use the route before publication. After publication,
+either active member of the same household may use it. A published edit is sent
+through WeChat text-content safety before the write; rejection returns
+`DINNER_RECIPE_CONTENT_REJECTED`, and an unavailable check returns
+`DINNER_RECIPE_MODERATION_UNAVAILABLE`. The transaction then re-locks the active
+household context and recipe, rechecks the version and membership, updates the
+full method set, makes the selected default's duration the recipe summary
+duration, increments the aggregate version once and emits the existing family
+recipe update notification. Archived recipes are not editable.
 
 Basic-info body:
 
@@ -296,7 +342,7 @@ Default-method replacement body:
 
 The body replaces the single default method and all its steps in request order. Method name is limited to 40 characters, cooking style to 32, and the array to 12 steps. A draft may save a blank method name, blank cooking style, or incomplete step text; publication requires a nonblank method name, a nonblank cooking style, and 1-12 nonblank steps, each within the same limits and at most 160 characters per instruction.
 
-A recipe aggregate response contains `id`, `status`, `version`, nullable basic fields, `ingredients`, nullable `defaultMethod`, nullable `image`, `incompleteSteps`, and ISO-8601 `updatedAt`. Ingredient items contain `ingredientId`, `name`, nullable `quantity`, `unit`, `required`, and zero-based `sortOrder`. The default method contains `id`, `name`, `cookingStyle`, and ordered `{instruction, sortOrder}` items.
+A recipe aggregate response contains `id`, `status`, `version`, nullable basic fields, `ingredients`, nullable `defaultMethod`, ordered `methods`, nullable `image`, `incompleteSteps`, and ISO-8601 `updatedAt`. Ingredient items contain `ingredientId`, `name`, nullable `quantity`, `unit`, `required`, and zero-based `sortOrder`. The backward-compatible `defaultMethod` contains `id`, `name`, `cookingStyle`, and ordered `{instruction, sortOrder}` items. Each `methods` item additionally contains `estimatedMinutes`, `defaultMethod`, `sortOrder`, and its ordered steps.
 
 Family list items contain `id`, `status`, nullable `name` and `imageUrl`, basic fields, `version`, privacy-safe `creator` and `lastModifier` actors shaped as `{kind}`, `completedStep`, and `updatedAt`. Actor `kind` uses the household relation values defined below (`ME`, current `PARTNER`, `EXITED_MEMBER`, or `DELETED_MEMBER`); creator or modifier IDs and names are never returned. List order is `updatedAt` descending, then recipe ID descending.
 
@@ -331,7 +377,7 @@ The normalized moderation content contains flavor, method name, cooking style, a
 
 After moderation passes, a short transaction re-locks the recipe and active household membership, revalidates the same expected version, completeness, and approved image, then atomically sets `PUBLISHED`, `publishedAt`, last modifier, and the next version. A change during moderation therefore returns the same 409 conflict instead of publishing stale text.
 
-V7 connects valid published household recipes to discovery, tonight-menu selection, and immutable cooking-record detail. Editing a published recipe through a revision draft, method variants, copying system recipes, and archiving remain outside these endpoints even though V6 reserves model fields/statuses for later work.
+V7 connects valid published household recipes to discovery, tonight-menu selection, and immutable cooking-record detail. The complete-method-set route now supports adding and editing published household method variants without a new migration. Full published-recipe revision drafts, copying system recipes, and archiving remain outside these endpoints even though V6 reserves model fields/statuses for later work.
 
 Flyway migration `V7__connect_household_recipes_to_menus.sql` adds `recipe_version BIGINT NOT NULL DEFAULT 1` and nullable `method_id` to `dinner_menu_selections`; `method_id` is indexed and references `dinner_recipe_methods(id)`. Existing system-recipe selections therefore normalize to recipe version `1` with no method. It also adds nullable `recipe_scope`, `recipe_version`, `servings`, `method_id`, `method_name`, `cooking_style`, `method_steps` JSON, and `ingredients` JSON columns to `dinner_record_dish_snapshots`. The snapshot `method_id` intentionally has no foreign key to the live method table. All snapshot additions are nullable so pre-V7 record rows remain readable without rewriting historical data.
 
@@ -522,7 +568,7 @@ Visibility is evaluated for every list, count and read operation:
 
 `beforeId` and `notificationId` must be positive; invalid query/path values return HTTP 400 `VALIDATION_ERROR`. A missing, foreign, expired or no-longer-visible single notification returns HTTP 404 `DINNER_NOTIFICATION_NOT_FOUND` without revealing whether another user's row exists. Single-read and read-all operations are idempotent.
 
-Domain services publish a notification only after their existing authorization, optimistic-version and idempotency checks succeed, in the same transaction as the business change. Fixed reference type/id/version semantics derive a deterministic dedupe key. Duplicate delivery of the same successful semantic event is treated as already published, while other persistence failures abort the transaction so the business change cannot commit without its in-app notification. Events cover partner join, partner selection changes or reconfirmation, menu completion, household-recipe publication, inventory creation/update/removal, ownership transfer, member leave and member removal.
+Domain services publish a notification only after their existing authorization, optimistic-version and idempotency checks succeed, in the same transaction as the business change. Fixed reference type/id/version semantics derive a deterministic dedupe key. Duplicate delivery of the same successful semantic event is treated as already published, while other persistence failures abort the transaction so the business change cannot commit without its in-app notification. Events cover partner join, partner selection changes or reconfirmation, menu completion, household-recipe publication or published-method update, inventory creation/update/removal, ownership transfer, member leave and member removal.
 
 The local V9 migration integration test uses a disposable loopback-only MySQL 8.0.45 instance and covers fresh, production-shaped V4 and current V8 catalogs through V9. It verifies the CHECK constraints, absence of foreign keys, valid rows and dedupe enforcement, then removes every ephemeral catalog and container. This is local migration evidence only; production V9, server deployment, WeChat upload and subscription-message templates have not been executed.
 

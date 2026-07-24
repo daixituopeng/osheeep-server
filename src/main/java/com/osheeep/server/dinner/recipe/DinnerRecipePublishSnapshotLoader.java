@@ -53,6 +53,6 @@ public class DinnerRecipePublishSnapshotLoader {
                 snapshot.recipeId(), snapshot.creatorId(), snapshot.householdId(), snapshot.version(),
                 snapshot.name(), snapshot.category(), snapshot.flavor(), snapshot.servings(),
                 snapshot.estimatedMinutes(), snapshot.imageAssetId(), snapshot.ingredients(),
-                snapshot.defaultMethod(), textBuilder.build(snapshot));
+                snapshot.defaultMethod(), textBuilder.build(snapshot, detail.methods()));
     }
 }
