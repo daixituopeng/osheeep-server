@@ -242,6 +242,7 @@ All `/api/dinner/**` routes below require a bearer token. `GET /media/recipes/**
 | PUT    | `/api/dinner/recipes/{id}/methods`        | Versioned complete active-method set     | Updated visible aggregate             |
 | PUT    | `/api/dinner/recipes/{id}/image`          | `version`, nullable `imageAssetId`        | Updated aggregate draft               |
 | POST   | `/api/dinner/recipes/{id}/publish`        | `version`                                | Published aggregate                   |
+| POST   | `/api/dinner/recipes/{id}/copy`           | None                                     | New private household draft           |
 | POST   | `/api/dinner/recipes/{id}/edit-drafts`    | None                                     | Current member's private revision     |
 | POST   | `/api/dinner/recipes/{id}/archive`        | `version`                                | Archived household aggregate          |
 | GET    | `/api/dinner/image-assets`                | Optional `query` query parameter          | Approved image metadata array         |
@@ -379,6 +380,18 @@ The normalized moderation content contains flavor, method name, cooking style, a
 
 After moderation passes, a short transaction re-locks the recipe and active household membership, revalidates the same expected version, completeness, and approved image, then atomically sets `PUBLISHED`, `publishedAt`, last modifier, and the next version. A change during moderation therefore returns the same 409 conflict instead of publishing stale text.
 
+`POST /api/dinner/recipes/{systemRecipeId}/copy` requires a
+`SYSTEM + PUBLISHED` source with no household owner and an active household
+membership. Each explicit request creates a new version-`1`, current-user
+private `HOUSEHOLD + DRAFT` in the active household. The transaction copies
+basic information, ordered ingredients, every active method and its ordered
+steps, records `sourceRecipeId`, and leaves revision fields empty. It never
+copies the legacy system `imagePath`; `imageAssetId` is retained only when the
+asset still resolves as approved, otherwise the draft image is empty and the
+normal approved-library publish gate applies. A missing source returns
+`DINNER_RECIPE_NOT_FOUND`; a non-system, unpublished, archived or
+household-owned source returns `FORBIDDEN`.
+
 `POST /api/dinner/recipes/{publishedId}/edit-drafts` requires a current-household
 `PUBLISHED` recipe. It creates or returns the current user's single private
 revision for that shared recipe. The revision starts at version `1`, records the
@@ -409,7 +422,7 @@ private revision into an ordinary independent draft by clearing its revision
 base. Those drafts and their content remain owned by their creators and may
 later be published as new household recipes. There is no unarchive route.
 
-V7 connects valid published household recipes to discovery, tonight-menu selection, and immutable cooking-record detail. The complete-method-set route supports adding and editing published household method variants; the revision and archive routes now use V6's reserved fields and statuses without a new migration. Copying system recipes remains outside these endpoints.
+V7 connects valid published household recipes to discovery, tonight-menu selection, and immutable cooking-record detail. The complete-method-set route supports adding and editing published household method variants; the copy, revision and archive routes use V6's reserved fields and statuses without a new migration.
 
 Flyway migration `V7__connect_household_recipes_to_menus.sql` adds `recipe_version BIGINT NOT NULL DEFAULT 1` and nullable `method_id` to `dinner_menu_selections`; `method_id` is indexed and references `dinner_recipe_methods(id)`. Existing system-recipe selections therefore normalize to recipe version `1` with no method. It also adds nullable `recipe_scope`, `recipe_version`, `servings`, `method_id`, `method_name`, `cooking_style`, `method_steps` JSON, and `ingredients` JSON columns to `dinner_record_dish_snapshots`. The snapshot `method_id` intentionally has no foreign key to the live method table. All snapshot additions are nullable so pre-V7 record rows remain readable without rewriting historical data.
 

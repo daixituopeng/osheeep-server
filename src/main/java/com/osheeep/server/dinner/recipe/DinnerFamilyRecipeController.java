@@ -33,6 +33,7 @@ public class DinnerFamilyRecipeController {
     private final DinnerRecipePublicationService publicationService;
     private final DinnerRecipeMethodService methodService;
     private final DinnerRecipeRevisionService revisionService;
+    private final DinnerRecipeCopyService copyService;
     private final DinnerRecipeArchiveService archiveService;
 
     public DinnerFamilyRecipeController(
@@ -41,6 +42,7 @@ public class DinnerFamilyRecipeController {
             DinnerRecipePublicationService publicationService,
             DinnerRecipeMethodService methodService,
             DinnerRecipeRevisionService revisionService,
+            DinnerRecipeCopyService copyService,
             DinnerRecipeArchiveService archiveService
     ) {
         this.draftService = draftService;
@@ -48,6 +50,7 @@ public class DinnerFamilyRecipeController {
         this.publicationService = publicationService;
         this.methodService = methodService;
         this.revisionService = revisionService;
+        this.copyService = copyService;
         this.archiveService = archiveService;
     }
 
@@ -134,6 +137,14 @@ public class DinnerFamilyRecipeController {
             @PathVariable Long id
     ) {
         return ApiResponse.ok(revisionService.start(currentUser.id(), id));
+    }
+
+    @PostMapping("/{id}/copy")
+    public ApiResponse<RecipeDraftResponse> copySystemRecipe(
+            @AuthenticationPrincipal CurrentUser currentUser,
+            @PathVariable Long id
+    ) {
+        return ApiResponse.ok(copyService.copy(currentUser.id(), id));
     }
 
     @PostMapping("/{id}/archive")
