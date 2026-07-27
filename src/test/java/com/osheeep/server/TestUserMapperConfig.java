@@ -17,6 +17,7 @@ import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeIngredientMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMethodMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMethodStepMapper;
+import com.osheeep.server.dinner.recipe.mapper.DinnerRecipePreferenceMapper;
 import com.osheeep.server.dinner.record.mapper.DinnerCookingRecordMapper;
 import com.osheeep.server.dinner.record.mapper.DinnerRecordDishSnapshotMapper;
 import com.osheeep.server.auth.wechat.WechatCode2SessionClient;
@@ -154,6 +155,11 @@ public class TestUserMapperConfig {
     @Bean
     public DinnerRecipeMethodStepMapper dinnerRecipeMethodStepMapper() {
         return Mockito.mock(DinnerRecipeMethodStepMapper.class);
+    }
+
+    @Bean
+    public DinnerRecipePreferenceMapper dinnerRecipePreferenceMapper() {
+        return Mockito.mock(DinnerRecipePreferenceMapper.class);
     }
 
     @Bean

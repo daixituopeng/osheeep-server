@@ -44,6 +44,8 @@ public enum ErrorCode {
     DINNER_MENU_COMPLETED(HttpStatus.CONFLICT, "Dinner menu is already completed"),
     DINNER_RECIPE_NOT_FOUND(HttpStatus.NOT_FOUND, "Dinner recipe was not found"),
     DINNER_RECIPE_VERSION_CONFLICT(HttpStatus.CONFLICT, "Dinner recipe was updated elsewhere"),
+    DINNER_RECIPE_PREFERENCE_VERSION_CONFLICT(
+            HttpStatus.CONFLICT, "Dinner recipe preference was updated elsewhere"),
     DINNER_RECIPE_VALIDATION_FAILED(
             HttpStatus.UNPROCESSABLE_ENTITY, "Dinner recipe is incomplete"),
     DINNER_RECIPE_IMAGE_INVALID(

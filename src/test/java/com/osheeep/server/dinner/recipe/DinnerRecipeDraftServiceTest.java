@@ -65,7 +65,7 @@ import org.springframework.dao.CannotAcquireLockException;
 @ExtendWith(MockitoExtension.class)
 class DinnerRecipeDraftServiceTest {
 
-    private static final RecipeAccess LOCKED_ACCESS = new RecipeAccess(7L, 70L);
+    private static final RecipeAccess LOCKED_ACCESS = new RecipeAccess(7L, 70L, 11L);
 
     @Mock private DinnerRecipeMapper recipeMapper;
     @Mock private DinnerRecipeIngredientMapper recipeIngredientMapper;

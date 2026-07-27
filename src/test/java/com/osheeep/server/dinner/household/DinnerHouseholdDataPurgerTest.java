@@ -30,10 +30,12 @@ import com.osheeep.server.dinner.recipe.entity.DinnerRecipeEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeIngredientEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeMethodEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeMethodStepEntity;
+import com.osheeep.server.dinner.recipe.entity.DinnerRecipePreferenceEntity;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeIngredientMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMethodMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMethodStepMapper;
+import com.osheeep.server.dinner.recipe.mapper.DinnerRecipePreferenceMapper;
 import com.osheeep.server.dinner.record.entity.DinnerCookingRecordEntity;
 import com.osheeep.server.dinner.record.mapper.DinnerCookingRecordMapper;
 import com.osheeep.server.dinner.record.mapper.DinnerRecordDishSnapshotMapper;
@@ -69,6 +71,7 @@ class DinnerHouseholdDataPurgerTest {
     @Mock private DinnerHouseholdInventoryMapper inventoryMapper;
     @Mock private DinnerIngredientMapper ingredientMapper;
     @Mock private DinnerSubscriptionDeliveryMapper subscriptionDeliveryMapper;
+    @Mock private DinnerRecipePreferenceMapper recipePreferenceMapper;
 
     private DinnerHouseholdDataPurger purger;
 
@@ -81,6 +84,7 @@ class DinnerHouseholdDataPurgerTest {
                         DinnerMenuEntity.class, DinnerCookingRecordEntity.class,
                         DinnerRecipeEntity.class, DinnerRecipeMethodEntity.class,
                         DinnerRecipeMethodStepEntity.class, DinnerRecipeIngredientEntity.class,
+                        DinnerRecipePreferenceEntity.class,
                         DinnerHouseholdInventoryEntity.class,
                         DinnerIngredientEntity.class)
                 .forEach(type -> TableInfoHelper.initTableInfo(assistant, type));
@@ -94,6 +98,7 @@ class DinnerHouseholdDataPurgerTest {
                 methodMapper, stepMapper, recipeIngredientMapper, inventoryMapper,
                 ingredientMapper);
         purger.setSubscriptionDeliveryMapper(subscriptionDeliveryMapper);
+        purger.setRecipePreferenceMapper(recipePreferenceMapper);
     }
 
     @Test
@@ -118,6 +123,12 @@ class DinnerHouseholdDataPurgerTest {
         when(methodMapper.selectByRecipeIdsForUpdate(List.of(51L))).thenReturn(List.of());
         when(recipeIngredientMapper.selectByRecipeIdsForUpdate(List.of(51L)))
                 .thenReturn(List.of());
+        DinnerRecipePreferenceEntity preference = new DinnerRecipePreferenceEntity();
+        preference.setId(90L);
+        preference.setHouseholdId(11L);
+        when(recipePreferenceMapper.selectByHouseholdIdForUpdate(11L))
+                .thenReturn(List.of(preference));
+        when(recipePreferenceMapper.deleteByHouseholdId(11L)).thenReturn(1);
         when(inventoryMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of());
         when(ingredientMapper.selectAllHouseholdIngredientsForUpdate(11L))
                 .thenReturn(List.of());
@@ -128,6 +139,7 @@ class DinnerHouseholdDataPurgerTest {
         purger.purgeHousehold(11L, List.of(owner), Set.of());
 
         verify(recipeMapper).detachOwnedDraft(51L, 11L, 7L, 3L, null);
+        verify(recipePreferenceMapper).deleteByHouseholdId(11L);
         verify(subscriptionDeliveryMapper).deleteByHouseholdId(11L);
         verify(recipeMapper, never()).deleteBatchIds(any());
         assertThat(DinnerHouseholdDataPurger.class.getConstructors())

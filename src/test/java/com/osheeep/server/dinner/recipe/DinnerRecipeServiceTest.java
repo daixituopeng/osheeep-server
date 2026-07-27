@@ -27,8 +27,10 @@ import com.osheeep.server.dinner.recipe.dto.RecipeMethodOptionResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeMethodStepResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeMethodSummaryResponse;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeEntity;
+import com.osheeep.server.dinner.recipe.entity.DinnerRecipePreferenceEntity;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeIngredientRow;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMapper;
+import com.osheeep.server.dinner.recipe.mapper.DinnerRecipePreferenceMapper;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
@@ -55,6 +57,7 @@ class DinnerRecipeServiceTest {
     @Mock private DinnerRecipeCatalogAssembler catalogAssembler;
     @Mock private DinnerHouseholdMemberMapper memberMapper;
     @Mock private DinnerHouseholdMapper householdMapper;
+    @Mock private DinnerRecipePreferenceMapper preferenceMapper;
 
     private DinnerRecipeService service;
 
@@ -163,6 +166,45 @@ class DinnerRecipeServiceTest {
                 .contains("status =", "scope =", " OR ", "household_id =");
         assertThat(parameterValues(query.getValue()).values())
                 .contains("PUBLISHED", "SYSTEM", "HOUSEHOLD", 70L);
+    }
+
+    @Test
+    void householdPreferenceBreaksEqualMatchTiesBeforeCookingTime() {
+        List<DinnerRecipeEntity> recipes = List.of(
+                systemRecipe(1L, "快但未表态", 5),
+                systemRecipe(2L, "双方喜欢", 30),
+                systemRecipe(3L, "口味不同", 3));
+        when(authorizer.requireMembership(7L))
+                .thenReturn(new RecipeAccess(7L, 70L, 31L));
+        when(recipeMapper.selectList(any())).thenReturn(recipes);
+        when(catalogAssembler.assemble(recipes)).thenReturn(catalog(recipes, List.of()));
+        when(inventoryMapper.selectList(any())).thenReturn(List.of());
+        when(preferenceMapper.selectActiveByHouseholdAndRecipeIds(
+                70L, List.of(1L, 2L, 3L)))
+                .thenReturn(List.of(
+                        preference(1L, 31L, 7L, 2L, "LIKE"),
+                        preference(2L, 32L, 8L, 2L, "LIKE"),
+                        preference(3L, 31L, 7L, 3L, "LIKE"),
+                        preference(4L, 32L, 8L, 3L, "DISLIKE")));
+        DinnerRecipeService preferenceAwareService = new DinnerRecipeService(
+                recipeMapper,
+                inventoryMapper,
+                authorizer,
+                catalogAssembler,
+                new RecipeMatchCalculator(),
+                preferenceMapper,
+                new DinnerRecipePreferenceAggregator());
+
+        var result = preferenceAwareService.discover(
+                7L, Set.of(), Set.of(), false);
+
+        assertThat(result).extracting(item -> item.id())
+                .containsExactly(2L, 1L, 3L);
+        assertThat(result).extracting(item -> item.preference().householdPreference())
+                .containsExactly(
+                        com.osheeep.server.dinner.recipe.dto.HouseholdRecipePreference.BOTH_LIKE,
+                        com.osheeep.server.dinner.recipe.dto.HouseholdRecipePreference.NEUTRAL,
+                        com.osheeep.server.dinner.recipe.dto.HouseholdRecipePreference.MIXED);
     }
 
     @Test
@@ -449,6 +491,24 @@ class DinnerRecipeServiceTest {
         recipe.setEstimatedMinutes(minutes);
         recipe.setStatus("PUBLISHED");
         return recipe;
+    }
+
+    private DinnerRecipePreferenceEntity preference(
+            Long id,
+            Long membershipId,
+            Long userId,
+            Long recipeId,
+            String value
+    ) {
+        DinnerRecipePreferenceEntity preference = new DinnerRecipePreferenceEntity();
+        preference.setId(id);
+        preference.setHouseholdId(70L);
+        preference.setMembershipId(membershipId);
+        preference.setUserId(userId);
+        preference.setRecipeId(recipeId);
+        preference.setPreference(value);
+        preference.setVersion(1L);
+        return preference;
     }
 
     private DinnerRecipeIngredientRow row(

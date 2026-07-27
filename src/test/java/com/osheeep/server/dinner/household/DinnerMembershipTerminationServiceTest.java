@@ -36,6 +36,8 @@ import com.osheeep.server.dinner.menu.mapper.DinnerMenuMapper;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuSelectionMapper;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeIngredientEntity;
+import com.osheeep.server.dinner.recipe.entity.DinnerRecipePreferenceEntity;
+import com.osheeep.server.dinner.recipe.mapper.DinnerRecipePreferenceMapper;
 import com.osheeep.server.user.UserMapper;
 import com.osheeep.server.user.entity.UserEntity;
 import java.time.Clock;
@@ -94,6 +96,7 @@ class DinnerMembershipTerminationServiceTest {
     @Mock private DinnerHouseholdDraftLifecycleService draftLifecycleService;
     @Mock private DinnerHouseholdInventoryMapper inventoryMapper;
     @Mock private DinnerIngredientMapper ingredientMapper;
+    @Mock private DinnerRecipePreferenceMapper recipePreferenceMapper;
 
     private DinnerMembershipTerminationService service;
 
@@ -112,6 +115,7 @@ class DinnerMembershipTerminationServiceTest {
                 ingredientMapper,
                 new ObjectMapper(),
                 Clock.fixed(CLOCK_INSTANT, ZoneOffset.UTC));
+        service.setRecipePreferenceMapper(recipePreferenceMapper);
     }
 
     @Test
@@ -156,6 +160,15 @@ class DinnerMembershipTerminationServiceTest {
         when(draftLifecycleService.lockPersonalDraftIngredients(
                 MEMBER_USER_ID, HOUSEHOLD_ID, recipeLocks))
                 .thenReturn(recipeIngredients);
+        DinnerRecipePreferenceEntity preference = new DinnerRecipePreferenceEntity();
+        preference.setId(93L);
+        preference.setHouseholdId(HOUSEHOLD_ID);
+        preference.setMembershipId(MEMBER_MEMBERSHIP_ID);
+        preference.setUserId(MEMBER_USER_ID);
+        when(recipePreferenceMapper.selectByMembershipIdForUpdate(
+                MEMBER_MEMBERSHIP_ID)).thenReturn(List.of(preference));
+        when(recipePreferenceMapper.deleteByMembershipId(MEMBER_MEMBERSHIP_ID))
+                .thenReturn(1);
         when(inventoryMapper.selectAllByHouseholdIdForUpdate(HOUSEHOLD_ID))
                 .thenReturn(inventory);
         when(ingredientMapper.selectAllHouseholdIngredientsForUpdate(HOUSEHOLD_ID))
@@ -195,6 +208,7 @@ class DinnerMembershipTerminationServiceTest {
                 menuMapper,
                 selectionMapper,
                 draftLifecycleService,
+                recipePreferenceMapper,
                 inventoryMapper,
                 ingredientMapper);
         order.verify(userMapper).selectByIdForUpdate(MEMBER_USER_ID);
@@ -210,6 +224,8 @@ class DinnerMembershipTerminationServiceTest {
                 MEMBER_USER_ID, HOUSEHOLD_ID);
         order.verify(draftLifecycleService).lockPersonalDraftIngredients(
                 MEMBER_USER_ID, HOUSEHOLD_ID, recipeLocks);
+        order.verify(recipePreferenceMapper).selectByMembershipIdForUpdate(
+                MEMBER_MEMBERSHIP_ID);
         order.verify(inventoryMapper).selectAllByHouseholdIdForUpdate(HOUSEHOLD_ID);
         order.verify(ingredientMapper).selectAllHouseholdIngredientsForUpdate(HOUSEHOLD_ID);
         order.verify(inviteMapper).revokeOpenInvite(
@@ -226,6 +242,8 @@ class DinnerMembershipTerminationServiceTest {
                 recipeLocks,
                 recipeIngredients,
                 householdIngredients);
+        order.verify(recipePreferenceMapper).deleteByMembershipId(
+                MEMBER_MEMBERSHIP_ID);
         order.verify(memberMapper).endActiveMember(
                 MEMBER_MEMBERSHIP_ID,
                 HOUSEHOLD_ID,

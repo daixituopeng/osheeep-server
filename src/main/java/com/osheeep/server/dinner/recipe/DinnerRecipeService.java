@@ -12,9 +12,12 @@ import com.osheeep.server.dinner.recipe.RecipeMatchCalculator.Stock;
 import com.osheeep.server.dinner.recipe.dto.RecipeIngredientResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeDetailResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeMatchResponse;
+import com.osheeep.server.dinner.recipe.dto.RecipePreferenceResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeResponse;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeEntity;
+import com.osheeep.server.dinner.recipe.entity.DinnerRecipePreferenceEntity;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMapper;
+import com.osheeep.server.dinner.recipe.mapper.DinnerRecipePreferenceMapper;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -32,16 +35,20 @@ public class DinnerRecipeService {
     private final DinnerRecipeAuthorizer authorizer;
     private final DinnerRecipeCatalogAssembler catalogAssembler;
     private final RecipeMatchCalculator matchCalculator;
+    private final DinnerRecipePreferenceMapper preferenceMapper;
+    private final DinnerRecipePreferenceAggregator preferenceAggregator;
 
     @Autowired
     public DinnerRecipeService(
             DinnerRecipeMapper recipeMapper,
             DinnerHouseholdInventoryMapper inventoryMapper,
             DinnerRecipeAuthorizer authorizer,
-            DinnerRecipeCatalogAssembler catalogAssembler
+            DinnerRecipeCatalogAssembler catalogAssembler,
+            DinnerRecipePreferenceMapper preferenceMapper,
+            DinnerRecipePreferenceAggregator preferenceAggregator
     ) {
         this(recipeMapper, inventoryMapper, authorizer, catalogAssembler,
-                new RecipeMatchCalculator());
+                new RecipeMatchCalculator(), preferenceMapper, preferenceAggregator);
     }
 
     DinnerRecipeService(
@@ -51,11 +58,26 @@ public class DinnerRecipeService {
             DinnerRecipeCatalogAssembler catalogAssembler,
             RecipeMatchCalculator matchCalculator
     ) {
+        this(recipeMapper, inventoryMapper, authorizer, catalogAssembler,
+                matchCalculator, null, new DinnerRecipePreferenceAggregator());
+    }
+
+    DinnerRecipeService(
+            DinnerRecipeMapper recipeMapper,
+            DinnerHouseholdInventoryMapper inventoryMapper,
+            DinnerRecipeAuthorizer authorizer,
+            DinnerRecipeCatalogAssembler catalogAssembler,
+            RecipeMatchCalculator matchCalculator,
+            DinnerRecipePreferenceMapper preferenceMapper,
+            DinnerRecipePreferenceAggregator preferenceAggregator
+    ) {
         this.recipeMapper = recipeMapper;
         this.inventoryMapper = inventoryMapper;
         this.authorizer = authorizer;
         this.catalogAssembler = catalogAssembler;
         this.matchCalculator = matchCalculator;
+        this.preferenceMapper = preferenceMapper;
+        this.preferenceAggregator = preferenceAggregator;
     }
 
     public List<RecipeResponse> discover(
@@ -76,6 +98,14 @@ public class DinnerRecipeService {
                                                 access.householdId())))
                         .orderByAsc(DinnerRecipeEntity::getId));
         Map<Long, CatalogEntry> catalog = catalogAssembler.assemble(recipes);
+        List<Long> recipeIds = recipes.stream().map(DinnerRecipeEntity::getId).toList();
+        List<DinnerRecipePreferenceEntity> preferenceRows =
+                preferenceMapper == null || recipeIds.isEmpty()
+                        ? List.of()
+                        : preferenceMapper.selectActiveByHouseholdAndRecipeIds(
+                                access.householdId(), recipeIds);
+        Map<Long, RecipePreferenceResponse> preferences =
+                preferenceAggregator.aggregate(recipeIds, access.userId(), preferenceRows);
         List<DinnerHouseholdInventoryEntity> inventory = inventoryMapper.selectList(
                 Wrappers.<DinnerHouseholdInventoryEntity>lambdaQuery()
                         .eq(DinnerHouseholdInventoryEntity::getHouseholdId,
@@ -93,7 +123,8 @@ public class DinnerRecipeService {
                         entry,
                         householdStock,
                         includeIngredientIds,
-                        excludeIngredientIds))
+                        excludeIngredientIds,
+                        preferences.get(entry.recipe().getId())))
                 .filter(response -> !onlyCookable || !"MISSING".equals(response.match().status()))
                 .sorted(discoveryOrder())
                 .toList();
@@ -150,7 +181,8 @@ public class DinnerRecipeService {
             CatalogEntry entry,
             Map<Long, Stock> householdStock,
             Set<Long> includeIngredientIds,
-            Set<Long> excludeIngredientIds
+            Set<Long> excludeIngredientIds,
+            RecipePreferenceResponse preference
     ) {
         DinnerRecipeEntity recipe = entry.recipe();
         List<RecipeIngredientResponse> ingredients = orderedIngredients(entry);
@@ -161,7 +193,7 @@ public class DinnerRecipeService {
                 recipe.getId(), recipe.getName(), entry.imagePath(), recipe.getCategory(),
                 recipe.getFlavor(), recipe.getEstimatedMinutes(), recipe.getScope(),
                 "SYSTEM".equals(recipe.getScope()) ? 1L : recipe.getVersion(),
-                entry.defaultMethod(), ingredients, match);
+                entry.defaultMethod(), ingredients, match, preference);
     }
 
     private List<RecipeIngredientResponse> orderedIngredients(CatalogEntry entry) {
@@ -197,6 +229,8 @@ public class DinnerRecipeService {
                         statusRank(response.match().status()))
                 .thenComparing(
                         response -> response.match().matchPercent(), Comparator.reverseOrder())
+                .thenComparingInt(response -> preferenceAggregator.rank(
+                        response.preference().householdPreference()))
                 .thenComparing(
                         RecipeResponse::estimatedMinutes,
                         Comparator.nullsLast(Comparator.naturalOrder()))

@@ -108,6 +108,7 @@ All routes in this section require a bearer token. The client never supplies a h
 | DELETE | `/api/dinner/inventory/{ingredientId}` | Required query parameter `version`                | No data                                 |
 | GET    | `/api/dinner/recipes`                  | Optional query parameters described below         | Matched visible published recipe array  |
 | GET    | `/api/dinner/recipes/{recipeId}/view`  | None                                              | Consumer recipe detail with all methods |
+| PUT    | `/api/dinner/recipes/{recipeId}/preference` | `preference`, `version`                       | Current recipe preference summary       |
 
 An ingredient response contains `id`, `name`, `category`, `defaultUnit`, and `scope`, where `scope` is `SYSTEM` or `HOUSEHOLD`. The catalog contains active system ingredients plus active household-scoped ingredients belonging to the current household, ordered by ID.
 
@@ -147,6 +148,7 @@ Each recipe contains `id`, `name`, `imagePath`, `category`, `flavor`, and `estim
 - `defaultMethod`: `null` for a system recipe; for a household recipe, the selected default-method summary `{id, name, cookingStyle}`.
 - `ingredients`: ordered items with `ingredientId`, `name`, nullable `quantity`, `unit`, `required`, and `sortOrder`; `RecipeIngredientResponse.quantity` is serialized explicitly as JSON `null` when absent.
 - `match`: `status`, `matchedRequired`, `totalRequired`, `matchPercent`, `missingIngredients`, and `unknownQuantityIngredients`.
+- `preference`: `myPreference`, `myVersion`, and the privacy-safe relationship-level `householdPreference`.
 
 Example household discovery item:
 
@@ -178,6 +180,11 @@ Example household discovery item:
     "matchPercent": 100,
     "missingIngredients": [],
     "unknownQuantityIngredients": ["番茄"]
+  },
+  "preference": {
+    "myPreference": "LIKE",
+    "myVersion": 2,
+    "householdPreference": "BOTH_LIKE"
   }
 }
 ```
@@ -186,7 +193,21 @@ Discovery includes published system recipes and valid published household recipe
 
 `GET /api/dinner/recipes/{recipeId}/view` applies the same published-system/current-household visibility boundary and returns `DINNER_RECIPE_NOT_FOUND` for a missing or invisible recipe. A visible recipe whose aggregate is no longer valid returns `DINNER_RECIPE_INVALID`. The detail contains the discovery identity, ordered ingredients and current inventory match, plus nullable `servings` and every active method ordered by default status and method ID. Each method contains `id`, `name`, `cookingStyle`, nullable `estimatedMinutes`, `defaultMethod`, and ordered `steps` with `instruction` and `sortOrder`. A valid household detail has exactly one active default method; system recipes may have no method.
 
-Only required ingredients contribute to matching. Missing stock, insufficient known quantity, or a unit mismatch is `MISSING`. When matching-unit stock is present, a `null` recipe requirement quantity, a `null` stock quantity, or both contributes to `matchedRequired` but produces `UNKNOWN_QUANTITY` and lists the ingredient in `unknownQuantityIngredients`. Complete required stock with both quantities known is `AVAILABLE`. Optional ingredients remain ignored. A recipe with only optional ingredients, or otherwise zero required ingredients, is `AVAILABLE` with `matchedRequired: 0`, `totalRequired: 0`, `matchPercent: 100`, `missingIngredients: []`, and `unknownQuantityIngredients: []`. Recipes are ordered by status (`AVAILABLE`, `UNKNOWN_QUANTITY`, `MISSING`), then descending `matchPercent`, ascending `estimatedMinutes` with unknown duration last, and finally ascending recipe ID.
+Only required ingredients contribute to matching. Missing stock, insufficient known quantity, or a unit mismatch is `MISSING`. When matching-unit stock is present, a `null` recipe requirement quantity, a `null` stock quantity, or both contributes to `matchedRequired` but produces `UNKNOWN_QUANTITY` and lists the ingredient in `unknownQuantityIngredients`. Complete required stock with both quantities known is `AVAILABLE`. Optional ingredients remain ignored. A recipe with only optional ingredients, or otherwise zero required ingredients, is `AVAILABLE` with `matchedRequired: 0`, `totalRequired: 0`, `matchPercent: 100`, `missingIngredients: []`, and `unknownQuantityIngredients: []`.
+
+Each active member may independently set `LIKE`, `NEUTRAL`, or `DISLIKE` for a visible `SYSTEM + PUBLISHED` recipe or a `HOUSEHOLD + PUBLISHED` recipe owned by the current household:
+
+```json
+{ "preference": "LIKE", "version": 0 }
+```
+
+Version `0` is create-only intent and stores version `1`. Later changes require the exact positive `myVersion` and increment once. A stale version, duplicate create race, or lock acquisition conflict returns HTTP 409 `DINNER_RECIPE_PREFERENCE_VERSION_CONFLICT`; the server does not replay the choice. A missing, draft, archived, malformed-system, or foreign-household recipe returns `DINNER_RECIPE_NOT_FOUND`.
+
+`householdPreference` is one of `BOTH_LIKE`, `SOME_LIKE`, `NEUTRAL`, `MIXED`, `SOME_DISLIKE`, or `BOTH_DISLIKE`. It exposes no user or membership ID. `myPreference` defaults to `NEUTRAL` with `myVersion: 0` before this member has written a choice. Discovery loads all visible recipe preferences in one batch and orders recipes by match status (`AVAILABLE`, `UNKNOWN_QUANTITY`, `MISSING`), descending `matchPercent`, household preference (`BOTH_LIKE`, `SOME_LIKE`, `NEUTRAL`, `MIXED`, `SOME_DISLIKE`, `BOTH_DISLIKE`), ascending `estimatedMinutes` with unknown duration last, and finally ascending recipe ID. With no stored preferences, the former time/ID order is unchanged.
+
+Preferences belong to a concrete membership cycle and are not copied into menu selections or cooking records. Leaving or removal deletes the ended membership's preferences; rejoining starts empty. Household dissolution deletes all household preferences, and account deletion deletes all preferences owned by that account.
+
+Flyway migration `V12__add_dinner_recipe_preferences.sql` creates the membership-cycle-bound preference table with an exact membership/recipe unique key, four parent foreign keys, the closed three-value check, and positive-version check. Local MySQL 8.0.45 verification on 2026-07-27 passed fresh, production-shaped V4, and current V11 paths through V12, including unique/value/version constraint rejection and ephemeral-catalog cleanup. This is local evidence only and does not imply a production V12 migration or deployment.
 
 This remains backward compatible at the request boundary: `GET /api/dinner/recipes` keeps the same authenticated route, all query parameters default to the old no-filter call, and no original recipe response field was removed. `PUT /api/dinner/menus/today/selections` continues to accept the legacy `{recipeIds, version}` body and resolves each household recipe to its active default method. Method-aware clients send `{selections:[{recipeId,methodId}],version}` instead; recipe scope, selected recipe version, method ownership and active status are always validated by the server.
 

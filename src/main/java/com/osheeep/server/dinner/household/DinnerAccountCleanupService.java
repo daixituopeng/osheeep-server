@@ -24,10 +24,12 @@ import com.osheeep.server.dinner.recipe.entity.DinnerRecipeEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeIngredientEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeMethodEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeMethodStepEntity;
+import com.osheeep.server.dinner.recipe.entity.DinnerRecipePreferenceEntity;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeIngredientMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMethodMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMethodStepMapper;
+import com.osheeep.server.dinner.recipe.mapper.DinnerRecipePreferenceMapper;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -59,6 +61,7 @@ public class DinnerAccountCleanupService {
     private final DinnerHouseholdDataPurger dataPurger;
     private DinnerNotificationMapper notificationMapper;
     private DinnerSubscriptionDeliveryMapper subscriptionDeliveryMapper;
+    private DinnerRecipePreferenceMapper recipePreferenceMapper;
 
     public DinnerAccountCleanupService(
             DinnerHouseholdMapper householdMapper,
@@ -101,6 +104,11 @@ public class DinnerAccountCleanupService {
     ) {
         this.subscriptionDeliveryMapper =
                 Objects.requireNonNull(subscriptionDeliveryMapper);
+    }
+
+    @Autowired(required = false)
+    void setRecipePreferenceMapper(DinnerRecipePreferenceMapper recipePreferenceMapper) {
+        this.recipePreferenceMapper = Objects.requireNonNull(recipePreferenceMapper);
     }
 
     /** Called only from {@link com.osheeep.server.user.AccountDeletionTransaction}. */
@@ -188,6 +196,8 @@ public class DinnerAccountCleanupService {
                 : requireList(selectionMapper.selectByMenuIdsForUpdate(menuIds));
 
         LockedPrivateDrafts privateDrafts = lockPrivateDrafts(userId);
+        List<DinnerRecipePreferenceEntity> currentRecipePreferences =
+                lockRecipePreferencesByMembership(actorMembership);
         inventoryMapper.selectAllByHouseholdIdForUpdate(householdId);
         ingredientMapper.selectAllHouseholdIngredientsForUpdate(householdId);
 
@@ -213,6 +223,8 @@ public class DinnerAccountCleanupService {
             }
         }
         deletePrivateDrafts(privateDrafts);
+        deleteRecipePreferencesByMembership(
+                actorMembership.getId(), currentRecipePreferences.size());
 
         List<Long> actorMembershipIds = memberships.stream()
                 .filter(member -> Objects.equals(userId, member.getUserId()))
@@ -388,6 +400,8 @@ public class DinnerAccountCleanupService {
         List<Long> membershipIds = actorMembershipIds.stream().sorted().toList();
         requireList(operationMapper.selectByActorOrTargetMembershipIdsForUpdate(
                 userId, membershipIds));
+        List<DinnerRecipePreferenceEntity> remainingRecipePreferences =
+                lockRecipePreferencesByUser(userId, membershipIds);
         LambdaQueryWrapper<DinnerHouseholdOperationEntity> operationDelete =
                 Wrappers.<DinnerHouseholdOperationEntity>lambdaQuery()
                         .eq(DinnerHouseholdOperationEntity::getActorId, userId);
@@ -396,6 +410,7 @@ public class DinnerAccountCleanupService {
                     DinnerHouseholdOperationEntity::getTargetMemberId, membershipIds);
         }
         operationMapper.delete(operationDelete);
+        deleteRecipePreferencesByUser(userId, remainingRecipePreferences.size());
         List<Long> remainingIds = lockedActorMemberships.stream()
                 .map(DinnerHouseholdMemberEntity::getId)
                 .filter(membershipId -> !deletedMembershipIds.contains(membershipId))
@@ -453,6 +468,73 @@ public class DinnerAccountCleanupService {
                 List.copyOf(actorMembershipIds),
                 List.copyOf(actorMemberships),
                 List.copyOf(householdMemberships));
+    }
+
+    private List<DinnerRecipePreferenceEntity> lockRecipePreferencesByMembership(
+            DinnerHouseholdMemberEntity membership
+    ) {
+        if (recipePreferenceMapper == null) {
+            return List.of();
+        }
+        List<DinnerRecipePreferenceEntity> preferences =
+                requireList(recipePreferenceMapper.selectByMembershipIdForUpdate(
+                        membership.getId()));
+        Long previousId = null;
+        for (DinnerRecipePreferenceEntity preference : preferences) {
+            if (preference == null
+                    || preference.getId() == null
+                    || !Objects.equals(membership.getHouseholdId(),
+                            preference.getHouseholdId())
+                    || !Objects.equals(membership.getId(), preference.getMembershipId())
+                    || !Objects.equals(membership.getUserId(), preference.getUserId())
+                    || previousId != null && preference.getId() <= previousId) {
+                throw householdVersionConflict();
+            }
+            previousId = preference.getId();
+        }
+        return List.copyOf(preferences);
+    }
+
+    private List<DinnerRecipePreferenceEntity> lockRecipePreferencesByUser(
+            Long userId,
+            List<Long> membershipIds
+    ) {
+        if (recipePreferenceMapper == null) {
+            return List.of();
+        }
+        List<DinnerRecipePreferenceEntity> preferences =
+                requireList(recipePreferenceMapper.selectByUserIdForUpdate(userId));
+        Set<Long> expectedMembershipIds = Set.copyOf(membershipIds);
+        Long previousId = null;
+        for (DinnerRecipePreferenceEntity preference : preferences) {
+            if (preference == null
+                    || preference.getId() == null
+                    || !Objects.equals(userId, preference.getUserId())
+                    || !expectedMembershipIds.contains(preference.getMembershipId())
+                    || previousId != null && preference.getId() <= previousId) {
+                throw householdVersionConflict();
+            }
+            previousId = preference.getId();
+        }
+        return List.copyOf(preferences);
+    }
+
+    private void deleteRecipePreferencesByMembership(
+            Long membershipId,
+            int expectedCount
+    ) {
+        if (recipePreferenceMapper != null
+                && recipePreferenceMapper.deleteByMembershipId(membershipId)
+                != expectedCount) {
+            throw householdVersionConflict();
+        }
+    }
+
+    private void deleteRecipePreferencesByUser(Long userId, int expectedCount) {
+        if (recipePreferenceMapper != null
+                && recipePreferenceMapper.deleteByUserId(userId) != expectedCount) {
+            throw householdVersionConflict();
+        }
     }
 
     private List<Long> validateMembershipIds(List<Long> membershipIds) {

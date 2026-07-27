@@ -27,10 +27,12 @@ import com.osheeep.server.dinner.recipe.entity.DinnerRecipeEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeIngredientEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeMethodEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeMethodStepEntity;
+import com.osheeep.server.dinner.recipe.entity.DinnerRecipePreferenceEntity;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeIngredientMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMethodMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMethodStepMapper;
+import com.osheeep.server.dinner.recipe.mapper.DinnerRecipePreferenceMapper;
 import com.osheeep.server.dinner.subscription.mapper.DinnerSubscriptionDeliveryMapper;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -63,6 +65,7 @@ class DinnerAccountCleanupServiceTest {
     @Mock private DinnerIngredientMapper ingredientMapper;
     @Mock private DinnerHouseholdDataPurger dataPurger;
     @Mock private DinnerSubscriptionDeliveryMapper subscriptionDeliveryMapper;
+    @Mock private DinnerRecipePreferenceMapper recipePreferenceMapper;
 
     private DinnerAccountCleanupService service;
 
@@ -73,7 +76,8 @@ class DinnerAccountCleanupServiceTest {
         List.of(DinnerHouseholdMemberEntity.class, DinnerHouseholdOperationEntity.class,
                         DinnerInviteCodeEntity.class, DinnerRecipeEntity.class,
                         DinnerRecipeIngredientEntity.class, DinnerRecipeMethodEntity.class,
-                        DinnerRecipeMethodStepEntity.class)
+                        DinnerRecipeMethodStepEntity.class,
+                        DinnerRecipePreferenceEntity.class)
                 .forEach(type -> TableInfoHelper.initTableInfo(assistant, type));
     }
 
@@ -84,6 +88,7 @@ class DinnerAccountCleanupServiceTest {
                 menuMapper, selectionMapper, recipeMapper, recipeIngredientMapper,
                 methodMapper, stepMapper, inventoryMapper, ingredientMapper, dataPurger);
         service.setSubscriptionDeliveryMapper(subscriptionDeliveryMapper);
+        service.setRecipePreferenceMapper(recipePreferenceMapper);
         lenient().when(recipeMapper.selectList(any())).thenReturn(List.of());
         lenient().when(memberMapper.selectIdsByUserId(7L)).thenReturn(List.of());
         lenient().when(operationMapper.selectByActorOrTargetMembershipIdsForUpdate(
@@ -130,6 +135,16 @@ class DinnerAccountCleanupServiceTest {
         when(memberMapper.deleteBatchIds(List.of(9L))).thenReturn(1);
         when(householdMapper.advanceMembershipAndInviteRevision(11L, 8L, 4L))
                 .thenReturn(1);
+        DinnerRecipePreferenceEntity currentPreference =
+                preference(90L, 11L, 32L, 7L);
+        DinnerRecipePreferenceEntity historicalPreference =
+                preference(91L, 22L, 9L, 7L);
+        when(recipePreferenceMapper.selectByMembershipIdForUpdate(32L))
+                .thenReturn(List.of(currentPreference));
+        when(recipePreferenceMapper.deleteByMembershipId(32L)).thenReturn(1);
+        when(recipePreferenceMapper.selectByUserIdForUpdate(7L))
+                .thenReturn(List.of(historicalPreference));
+        when(recipePreferenceMapper.deleteByUserId(7L)).thenReturn(1);
 
         service.removeUser(7L, DELETED_AT);
 
@@ -138,6 +153,8 @@ class DinnerAccountCleanupServiceTest {
         verify(operationMapper).selectByActorOrTargetMembershipIdsForUpdate(
                 7L, List.of(9L, 32L));
         verify(memberMapper).deleteBatchIds(List.of(9L));
+        verify(recipePreferenceMapper).deleteByMembershipId(32L);
+        verify(recipePreferenceMapper).deleteByUserId(7L);
         verify(memberMapper, never()).promoteActiveMember(any(), any(), any(), any());
         verify(householdMapper).advanceMembershipAndInviteRevision(11L, 8L, 4L);
         verifyNoInteractions(dataPurger);
@@ -277,5 +294,19 @@ class DinnerAccountCleanupServiceTest {
         membership.setVersion(2L);
         membership.setHistoryVisibleFrom(LocalDateTime.parse("2026-07-01T00:00:00"));
         return membership;
+    }
+
+    private DinnerRecipePreferenceEntity preference(
+            Long id,
+            Long householdId,
+            Long membershipId,
+            Long userId
+    ) {
+        DinnerRecipePreferenceEntity preference = new DinnerRecipePreferenceEntity();
+        preference.setId(id);
+        preference.setHouseholdId(householdId);
+        preference.setMembershipId(membershipId);
+        preference.setUserId(userId);
+        return preference;
     }
 }

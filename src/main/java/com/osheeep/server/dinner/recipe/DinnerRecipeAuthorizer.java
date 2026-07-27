@@ -38,13 +38,13 @@ public class DinnerRecipeAuthorizer {
 
     RecipeAccess requireMembership(Long userId) {
         ActiveHouseholdAccess access = accessService.requireActiveHousehold(userId);
-        return new RecipeAccess(access.userId(), access.householdId());
+        return new RecipeAccess(access.userId(), access.householdId(), access.membershipId());
     }
 
     RecipeAccess requireMembershipForUpdate(Long userId) {
         LockedHouseholdContext context = accessService.lockActiveHouseholdContext(userId);
         ActiveHouseholdAccess access = context.access();
-        return new RecipeAccess(access.userId(), access.householdId());
+        return new RecipeAccess(access.userId(), access.householdId(), access.membershipId());
     }
 
     public DinnerRecipeEntity requireOwnedDraft(Long userId, Long recipeId) {
@@ -97,6 +97,10 @@ public class DinnerRecipeAuthorizer {
         return new BusinessException(ErrorCode.FORBIDDEN);
     }
 
-    record RecipeAccess(Long userId, Long householdId) {
+    record RecipeAccess(Long userId, Long householdId, Long membershipId) {
+
+        RecipeAccess(Long userId, Long householdId) {
+            this(userId, householdId, null);
+        }
     }
 }

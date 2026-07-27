@@ -26,6 +26,8 @@ import com.osheeep.server.dinner.notification.DinnerNotificationPublisher;
 import com.osheeep.server.dinner.notification.DinnerNotificationReferenceType;
 import com.osheeep.server.dinner.notification.DinnerNotificationType;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeIngredientEntity;
+import com.osheeep.server.dinner.recipe.entity.DinnerRecipePreferenceEntity;
+import com.osheeep.server.dinner.recipe.mapper.DinnerRecipePreferenceMapper;
 import com.osheeep.server.user.UserMapper;
 import com.osheeep.server.user.entity.UserEntity;
 import java.time.Clock;
@@ -63,6 +65,7 @@ public class DinnerMembershipTerminationService {
     private final Clock clock;
     private DinnerNotificationPublisher notificationPublisher =
             DinnerNotificationPublisher.noop();
+    private DinnerRecipePreferenceMapper recipePreferenceMapper;
 
     @Autowired
     public DinnerMembershipTerminationService(
@@ -126,6 +129,11 @@ public class DinnerMembershipTerminationService {
         this.notificationPublisher = Objects.requireNonNull(notificationPublisher);
     }
 
+    @Autowired(required = false)
+    void setRecipePreferenceMapper(DinnerRecipePreferenceMapper recipePreferenceMapper) {
+        this.recipePreferenceMapper = Objects.requireNonNull(recipePreferenceMapper);
+    }
+
     @Transactional
     public HouseholdMutationResponse terminate(HouseholdOperationCommand command) {
         try {
@@ -160,7 +168,7 @@ public class DinnerMembershipTerminationService {
         Long targetUserId = context.target().getUserId();
 
         // Acquire every child lock before applying changes. The fixed order is invite, menu,
-        // recipe, inventory, then household ingredient.
+        // recipe, recipe preference, inventory, then household ingredient.
         List<DinnerInviteCodeEntity> invites = lockOpenInvites(householdId);
         List<DinnerMenuEntity> menus = lockUncompletedMenus(householdId);
         List<Long> menuIds = menus.stream().map(DinnerMenuEntity::getId).toList();
@@ -171,6 +179,8 @@ public class DinnerMembershipTerminationService {
         List<DinnerRecipeIngredientEntity> recipeIngredients =
                 draftLifecycleService.lockPersonalDraftIngredients(
                         targetUserId, householdId, recipes);
+        List<DinnerRecipePreferenceEntity> recipePreferences =
+                lockRecipePreferences(context.target(), householdId, targetUserId);
         List<DinnerHouseholdInventoryEntity> inventory =
                 inventoryMapper.selectAllByHouseholdIdForUpdate(householdId);
         validateInventory(householdId, inventory);
@@ -188,6 +198,7 @@ public class DinnerMembershipTerminationService {
                 recipes,
                 recipeIngredients,
                 householdIngredients);
+        deleteRecipePreferences(context.target(), recipePreferences);
 
         TerminationPolicy policy = context.policy();
         if (memberMapper.endActiveMember(
@@ -330,6 +341,45 @@ public class DinnerMembershipTerminationService {
             previousId = invite.getId();
         }
         return List.copyOf(invites);
+    }
+
+    private List<DinnerRecipePreferenceEntity> lockRecipePreferences(
+            DinnerHouseholdMemberEntity target,
+            Long householdId,
+            Long targetUserId
+    ) {
+        if (recipePreferenceMapper == null) {
+            return List.of();
+        }
+        List<DinnerRecipePreferenceEntity> preferences =
+                recipePreferenceMapper.selectByMembershipIdForUpdate(target.getId());
+        if (preferences == null) {
+            throw householdVersionConflict();
+        }
+        Long previousId = null;
+        for (DinnerRecipePreferenceEntity preference : preferences) {
+            if (preference == null
+                    || preference.getId() == null
+                    || !Objects.equals(householdId, preference.getHouseholdId())
+                    || !Objects.equals(target.getId(), preference.getMembershipId())
+                    || !Objects.equals(targetUserId, preference.getUserId())
+                    || previousId != null && preference.getId() <= previousId) {
+                throw householdVersionConflict();
+            }
+            previousId = preference.getId();
+        }
+        return List.copyOf(preferences);
+    }
+
+    private void deleteRecipePreferences(
+            DinnerHouseholdMemberEntity target,
+            List<DinnerRecipePreferenceEntity> preferences
+    ) {
+        if (recipePreferenceMapper != null
+                && recipePreferenceMapper.deleteByMembershipId(target.getId())
+                != preferences.size()) {
+            throw householdVersionConflict();
+        }
     }
 
     private List<DinnerMenuEntity> lockUncompletedMenus(Long householdId) {

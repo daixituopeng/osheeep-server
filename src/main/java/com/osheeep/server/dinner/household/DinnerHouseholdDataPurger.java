@@ -22,10 +22,12 @@ import com.osheeep.server.dinner.recipe.entity.DinnerRecipeEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeIngredientEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeMethodEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeMethodStepEntity;
+import com.osheeep.server.dinner.recipe.entity.DinnerRecipePreferenceEntity;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeIngredientMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMethodMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMethodStepMapper;
+import com.osheeep.server.dinner.recipe.mapper.DinnerRecipePreferenceMapper;
 import com.osheeep.server.dinner.record.entity.DinnerCookingRecordEntity;
 import com.osheeep.server.dinner.record.entity.DinnerRecordDishSnapshotEntity;
 import com.osheeep.server.dinner.record.mapper.DinnerCookingRecordMapper;
@@ -66,6 +68,7 @@ public class DinnerHouseholdDataPurger {
     private final DinnerIngredientMapper ingredientMapper;
     private DinnerNotificationMapper notificationMapper;
     private DinnerSubscriptionDeliveryMapper subscriptionDeliveryMapper;
+    private DinnerRecipePreferenceMapper recipePreferenceMapper;
 
     public DinnerHouseholdDataPurger(
             DinnerHouseholdMapper householdMapper,
@@ -112,6 +115,11 @@ public class DinnerHouseholdDataPurger {
     ) {
         this.subscriptionDeliveryMapper =
                 Objects.requireNonNull(subscriptionDeliveryMapper);
+    }
+
+    @Autowired(required = false)
+    void setRecipePreferenceMapper(DinnerRecipePreferenceMapper recipePreferenceMapper) {
+        this.recipePreferenceMapper = Objects.requireNonNull(recipePreferenceMapper);
     }
 
     @Transactional(propagation = Propagation.MANDATORY)
@@ -163,6 +171,11 @@ public class DinnerHouseholdDataPurger {
         List<DinnerRecipeIngredientEntity> recipeIngredients = recipeIds.isEmpty()
                 ? List.of()
                 : requireList(recipeIngredientMapper.selectByRecipeIdsForUpdate(recipeIds));
+        List<DinnerRecipePreferenceEntity> recipePreferences =
+                recipePreferenceMapper == null
+                        ? List.of()
+                        : requireList(recipePreferenceMapper
+                                .selectByHouseholdIdForUpdate(householdId));
         List<DinnerHouseholdInventoryEntity> inventory = requireList(
                 inventoryMapper.selectAllByHouseholdIdForUpdate(householdId));
         List<DinnerIngredientEntity> householdIngredients = requireList(
@@ -175,6 +188,7 @@ public class DinnerHouseholdDataPurger {
         validateAggregateRows(householdId, menus, selections, actions, records, snapshots,
                 recipes, lineageReferences, methods, steps, recipeIngredients, inventory,
                 householdIngredients, operations, invites);
+        validateRecipePreferences(householdId, recipePreferences);
 
         Set<Long> deletingRecipeIds = new HashSet<>();
         List<DinnerRecipeEntity> retainedDrafts = recipes.stream()
@@ -200,6 +214,9 @@ public class DinnerHouseholdDataPurger {
         detachRetainedDrafts(householdId, retainedDrafts, externalSources, deletingRecipeIds);
 
         deleteMenuAndRecordData(householdId, menuIds, recordIds);
+        deleteRecipePreferences(
+                recipePreferences,
+                () -> recipePreferenceMapper.deleteByHouseholdId(householdId));
         inviteMapper.delete(Wrappers.lambdaQuery(
                 com.osheeep.server.dinner.household.entity.DinnerInviteCodeEntity.class)
                 .eq(com.osheeep.server.dinner.household.entity.DinnerInviteCodeEntity::getHouseholdId,
@@ -488,6 +505,33 @@ public class DinnerHouseholdDataPurger {
                 || operations.stream().anyMatch(Objects::isNull)
                 || invites.stream().anyMatch(Objects::isNull)) {
             throw new IllegalStateException("Locked household aggregate is invalid");
+        }
+    }
+
+    private void validateRecipePreferences(
+            Long householdId,
+            List<DinnerRecipePreferenceEntity> preferences
+    ) {
+        Long previousId = null;
+        for (DinnerRecipePreferenceEntity preference : preferences) {
+            if (preference == null
+                    || preference.getId() == null
+                    || !Objects.equals(householdId, preference.getHouseholdId())
+                    || previousId != null && preference.getId() <= previousId) {
+                throw new IllegalStateException(
+                        "Locked household recipe preference set is invalid");
+            }
+            previousId = preference.getId();
+        }
+    }
+
+    private void deleteRecipePreferences(
+            List<DinnerRecipePreferenceEntity> preferences,
+            java.util.function.IntSupplier delete
+    ) {
+        if (recipePreferenceMapper != null && delete.getAsInt() != preferences.size()) {
+            throw new IllegalStateException(
+                    "Household recipe preferences changed during household purge");
         }
     }
 

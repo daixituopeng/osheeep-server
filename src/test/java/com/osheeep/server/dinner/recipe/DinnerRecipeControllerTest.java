@@ -4,6 +4,7 @@ import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -16,7 +17,11 @@ import com.osheeep.server.dinner.recipe.dto.RecipeMatchResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeMethodOptionResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeMethodStepResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeMethodSummaryResponse;
+import com.osheeep.server.dinner.recipe.dto.HouseholdRecipePreference;
+import com.osheeep.server.dinner.recipe.dto.RecipePreferenceResponse;
+import com.osheeep.server.dinner.recipe.dto.RecipePreferenceValue;
 import com.osheeep.server.dinner.recipe.dto.RecipeResponse;
+import com.osheeep.server.dinner.recipe.dto.UpdateRecipePreferenceRequest;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Set;
@@ -27,6 +32,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -40,12 +46,14 @@ class DinnerRecipeControllerTest {
     @Autowired private MockMvc mockMvc;
     @Autowired private JwtService jwtService;
     @MockitoBean private DinnerRecipeService recipeService;
+    @MockitoBean private DinnerRecipePreferenceService preferenceService;
 
     private String token;
 
     @BeforeEach
     void setUp() {
         reset(recipeService);
+        reset(preferenceService);
         token = jwtService.generateToken(new CurrentUser(7L, "wx_user"));
     }
 
@@ -82,7 +90,11 @@ class DinnerRecipeControllerTest {
                 .andExpect(jsonPath("$.data[0].ingredients[0].required").value(true))
                 .andExpect(jsonPath("$.data[0].ingredients[0].sortOrder").value(1))
                 .andExpect(jsonPath("$.data[0].match.status").value("AVAILABLE"))
-                .andExpect(jsonPath("$.data[0].match.matchPercent").value(100));
+                .andExpect(jsonPath("$.data[0].match.matchPercent").value(100))
+                .andExpect(jsonPath("$.data[0].preference.myPreference").value("NEUTRAL"))
+                .andExpect(jsonPath("$.data[0].preference.myVersion").value(0))
+                .andExpect(jsonPath("$.data[0].preference.householdPreference")
+                        .value("NEUTRAL"));
         verify(recipeService).discover(7L, Set.of(), Set.of(), false);
     }
 
@@ -127,6 +139,40 @@ class DinnerRecipeControllerTest {
                         .value("翻炒"))
                 .andExpect(jsonPath("$.data.methods[1].name").value("少油版"));
         verify(recipeService).detail(7L, 14L);
+    }
+
+    @Test
+    void writesAnAuthenticatedPreferenceWithTheExactClientVersion() throws Exception {
+        when(preferenceService.update(
+                7L,
+                14L,
+                new UpdateRecipePreferenceRequest(RecipePreferenceValue.LIKE, 2L)))
+                .thenReturn(new RecipePreferenceResponse(
+                        RecipePreferenceValue.LIKE,
+                        3L,
+                        HouseholdRecipePreference.BOTH_LIKE));
+
+        mockMvc.perform(authenticated(put("/api/dinner/recipes/14/preference")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"preference\":\"LIKE\",\"version\":2}")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.myPreference").value("LIKE"))
+                .andExpect(jsonPath("$.data.myVersion").value(3))
+                .andExpect(jsonPath("$.data.householdPreference").value("BOTH_LIKE"));
+
+        verify(preferenceService).update(
+                7L,
+                14L,
+                new UpdateRecipePreferenceRequest(RecipePreferenceValue.LIKE, 2L));
+    }
+
+    @Test
+    void preferenceWriteRequiresAValidEnumAndVersion() throws Exception {
+        mockMvc.perform(authenticated(put("/api/dinner/recipes/14/preference")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"preference\":\"LOVE\",\"version\":-1}")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"));
     }
 
     private RecipeResponse response() {
