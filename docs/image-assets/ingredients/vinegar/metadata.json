@@ -1,0 +1,21 @@
+{
+  "provider": "WIKIMEDIA_COMMONS",
+  "displayName": "醋",
+  "ingredientNames": [
+    "醋"
+  ],
+  "fileTitle": "Brandy Vinegar.jpg",
+  "sourcePageUrl": "https://commons.wikimedia.org/wiki/File:Brandy_Vinegar.jpg",
+  "originalFileUrl": "https://upload.wikimedia.org/wikipedia/commons/4/47/Brandy_Vinegar.jpg",
+  "author": "Brücke-Osteuropa",
+  "licenseName": "CC0 1.0",
+  "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "acquiredOn": "2026-08-03",
+  "sha256": "2dae68a58f1d2bd0cf8b2f0213debaaf59a2d5269c41714ca0fe6ae65e0160fb",
+  "originalWidth": 1692,
+  "originalHeight": 2766,
+  "originalObjectKey": "internal/ingredients/vinegar/original.jpg",
+  "listObjectKey": "media/ingredients/vinegar-list.webp",
+  "detailObjectKey": "media/ingredients/vinegar-detail.webp",
+  "status": "APPROVED"
+}

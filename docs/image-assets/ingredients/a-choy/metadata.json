@@ -1,0 +1,21 @@
+{
+  "provider": "WIKIMEDIA_COMMONS",
+  "displayName": "油麦菜",
+  "ingredientNames": [
+    "油麦菜"
+  ],
+  "fileTitle": "Lactuca sativa var. angustana 'Karola' kz01.jpg",
+  "sourcePageUrl": "https://commons.wikimedia.org/wiki/File:Lactuca_sativa_var._angustana_'Karola'_kz01.jpg",
+  "originalFileUrl": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Lactuca_sativa_var._angustana_'Karola'_kz01.jpg",
+  "author": "Kenraiz",
+  "licenseName": "CC BY-SA 4.0",
+  "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0/",
+  "acquiredOn": "2026-08-03",
+  "sha256": "d63f0357854b679eea8d7381cf86564b0282539006113349a799b89d89b1b54b",
+  "originalWidth": 3072,
+  "originalHeight": 4608,
+  "originalObjectKey": "internal/ingredients/a-choy/original.jpg",
+  "listObjectKey": "media/ingredients/a-choy-list.webp",
+  "detailObjectKey": "media/ingredients/a-choy-detail.webp",
+  "status": "APPROVED"
+}

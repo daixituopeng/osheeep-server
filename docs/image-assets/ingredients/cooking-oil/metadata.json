@@ -1,0 +1,21 @@
+{
+  "provider": "WIKIMEDIA_COMMONS",
+  "displayName": "食用油",
+  "ingredientNames": [
+    "食用油"
+  ],
+  "fileTitle": "Bottle of olive oil.jpg",
+  "sourcePageUrl": "https://commons.wikimedia.org/wiki/File:Bottle_of_olive_oil.jpg",
+  "originalFileUrl": "https://upload.wikimedia.org/wikipedia/commons/1/13/Bottle_of_olive_oil.jpg",
+  "author": "margenauer",
+  "licenseName": "CC0 1.0",
+  "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "acquiredOn": "2026-08-03",
+  "sha256": "a82bbb115dea7e99c0eb2dd922497d9928af9cad951b9da45c6760d89dc366bb",
+  "originalWidth": 3260,
+  "originalHeight": 3260,
+  "originalObjectKey": "internal/ingredients/cooking-oil/original.jpg",
+  "listObjectKey": "media/ingredients/cooking-oil-list.webp",
+  "detailObjectKey": "media/ingredients/cooking-oil-detail.webp",
+  "status": "APPROVED"
+}

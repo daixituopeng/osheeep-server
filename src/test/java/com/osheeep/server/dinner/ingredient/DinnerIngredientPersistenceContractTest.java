@@ -32,4 +32,17 @@ class DinnerIngredientPersistenceContractTest {
 
         assertThat(migration).contains("version BIGINT NOT NULL DEFAULT 1");
     }
+
+    @Test
+    void ingredientImageMigrationLinksReviewedAssetsToSystemIngredients() throws Exception {
+        String migration = Files.readString(Path.of(
+                "src/main/resources/db/migration/V13__add_ingredient_image_assets.sql"));
+
+        assertThat(migration)
+                .contains("ADD COLUMN image_asset_id BIGINT NULL")
+                .contains("media/ingredients/tomato-list.webp")
+                .contains("WHERE scope = 'SYSTEM' AND name IN ('番茄')");
+        assertThat(migration.split("INSERT INTO dinner_image_assets", -1)).hasSize(25);
+        assertThat(migration.split("SET image_asset_id", -1)).hasSize(25);
+    }
 }

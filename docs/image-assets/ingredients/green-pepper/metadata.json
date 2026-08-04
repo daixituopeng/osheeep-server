@@ -1,0 +1,21 @@
+{
+  "provider": "WIKIMEDIA_COMMONS",
+  "displayName": "青椒",
+  "ingredientNames": [
+    "青椒"
+  ],
+  "fileTitle": "Green Bell Pepper (53630132710).jpg",
+  "sourcePageUrl": "https://commons.wikimedia.org/wiki/File:Green_Bell_Pepper_(53630132710).jpg",
+  "originalFileUrl": "https://upload.wikimedia.org/wikipedia/commons/5/5a/Green_Bell_Pepper_%2853630132710%29.jpg",
+  "author": "Alabama Extension",
+  "licenseName": "CC0 1.0",
+  "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "acquiredOn": "2026-08-03",
+  "sha256": "7b5159d34a539803286f67190f1d12e748deefdbc19c157fbf3c0158a041090e",
+  "originalWidth": 5472,
+  "originalHeight": 3648,
+  "originalObjectKey": "internal/ingredients/green-pepper/original.jpg",
+  "listObjectKey": "media/ingredients/green-pepper-list.webp",
+  "detailObjectKey": "media/ingredients/green-pepper-detail.webp",
+  "status": "APPROVED"
+}

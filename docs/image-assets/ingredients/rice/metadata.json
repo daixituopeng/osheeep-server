@@ -1,0 +1,21 @@
+{
+  "provider": "WIKIMEDIA_COMMONS",
+  "displayName": "大米",
+  "ingredientNames": [
+    "大米"
+  ],
+  "fileTitle": "20191213 rice grain collection-1.jpg",
+  "sourcePageUrl": "https://commons.wikimedia.org/wiki/File:20191213_rice_grain_collection-1.jpg",
+  "originalFileUrl": "https://commons.wikimedia.org/wiki/Special:Redirect/file/20191213_rice_grain_collection-1.jpg",
+  "author": "Balon Greyjoy",
+  "licenseName": "CC0 1.0",
+  "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "acquiredOn": "2026-08-03",
+  "sha256": "536dcb023ae8ff643fa02e122c70827e084706bce3478cadaa41cb559a729ce8",
+  "originalWidth": 4020,
+  "originalHeight": 3185,
+  "originalObjectKey": "internal/ingredients/rice/original.jpg",
+  "listObjectKey": "media/ingredients/rice-list.webp",
+  "detailObjectKey": "media/ingredients/rice-detail.webp",
+  "status": "APPROVED"
+}

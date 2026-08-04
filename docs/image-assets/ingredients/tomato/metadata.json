@@ -1,0 +1,21 @@
+{
+  "provider": "WIKIMEDIA_COMMONS",
+  "displayName": "番茄",
+  "ingredientNames": [
+    "番茄"
+  ],
+  "fileTitle": "Tomatoes.jpg",
+  "sourcePageUrl": "https://commons.wikimedia.org/wiki/File:Tomatoes.jpg",
+  "originalFileUrl": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Tomatoes.jpg",
+  "author": "Wilfredor",
+  "licenseName": "CC0 1.0",
+  "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "acquiredOn": "2026-08-03",
+  "sha256": "a851c21371698ab57df141273c771599090abd6a8a65592255f067446fbedf2a",
+  "originalWidth": 4165,
+  "originalHeight": 2681,
+  "originalObjectKey": "internal/ingredients/tomato/original.jpg",
+  "listObjectKey": "media/ingredients/tomato-list.webp",
+  "detailObjectKey": "media/ingredients/tomato-detail.webp",
+  "status": "APPROVED"
+}

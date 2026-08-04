@@ -1,0 +1,21 @@
+{
+  "provider": "WIKIMEDIA_COMMONS",
+  "displayName": "姜",
+  "ingredientNames": [
+    "姜"
+  ],
+  "fileTitle": "Ginger Root (Zingiber officinale).jpg",
+  "sourcePageUrl": "https://commons.wikimedia.org/wiki/File:Ginger_Root_(Zingiber_officinale).jpg",
+  "originalFileUrl": "https://upload.wikimedia.org/wikipedia/commons/7/7f/Ginger_Root_%28Zingiber_officinale%29.jpg",
+  "author": "Rubel Das",
+  "licenseName": "CC0 1.0",
+  "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "acquiredOn": "2026-08-03",
+  "sha256": "25f87b4cbbbcb812d558663c427c846d8cf1afb870866298be0480f7b2f8d119",
+  "originalWidth": 2992,
+  "originalHeight": 2992,
+  "originalObjectKey": "internal/ingredients/ginger/original.jpg",
+  "listObjectKey": "media/ingredients/ginger-list.webp",
+  "detailObjectKey": "media/ingredients/ginger-detail.webp",
+  "status": "APPROVED"
+}

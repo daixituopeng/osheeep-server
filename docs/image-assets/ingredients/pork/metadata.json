@@ -1,0 +1,21 @@
+{
+  "provider": "WIKIMEDIA_COMMONS",
+  "displayName": "猪肉",
+  "ingredientNames": [
+    "猪肉"
+  ],
+  "fileTitle": "Carne de Porco.jpg",
+  "sourcePageUrl": "https://commons.wikimedia.org/wiki/File:Carne_de_Porco.jpg",
+  "originalFileUrl": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Carne_de_Porco.jpg",
+  "author": "Stylledogheto",
+  "licenseName": "CC0 1.0",
+  "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "acquiredOn": "2026-08-03",
+  "sha256": "698e8617cade40c35bbe70838b7462738faa6fd10446695456c9569dfd194777",
+  "originalWidth": 3120,
+  "originalHeight": 4160,
+  "originalObjectKey": "internal/ingredients/pork/original.jpg",
+  "listObjectKey": "media/ingredients/pork-list.webp",
+  "detailObjectKey": "media/ingredients/pork-detail.webp",
+  "status": "APPROVED"
+}

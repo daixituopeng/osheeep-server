@@ -25,10 +25,14 @@ import com.osheeep.server.dinner.ingredient.entity.DinnerHouseholdInventoryEntit
 import com.osheeep.server.dinner.ingredient.entity.DinnerIngredientEntity;
 import com.osheeep.server.dinner.ingredient.mapper.DinnerHouseholdInventoryMapper;
 import com.osheeep.server.dinner.ingredient.mapper.DinnerIngredientMapper;
+import com.osheeep.server.dinner.image.DinnerImageAssetService;
+import com.osheeep.server.dinner.image.dto.ImageAssetResponse;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -47,12 +51,14 @@ class DinnerIngredientServiceTest {
     @Mock private DinnerIngredientMapper ingredientMapper;
     @Mock private DinnerHouseholdInventoryMapper inventoryMapper;
     @Mock private DinnerHouseholdAccessService accessService;
+    @Mock private DinnerImageAssetService imageAssetService;
 
     private DinnerIngredientService service;
 
     @BeforeEach
     void setUp() {
-        service = new DinnerIngredientService(ingredientMapper, inventoryMapper, accessService);
+        service = new DinnerIngredientService(
+                ingredientMapper, inventoryMapper, accessService, imageAssetService);
     }
 
     @Test
@@ -65,6 +71,25 @@ class DinnerIngredientServiceTest {
         assertThat(service.listIngredients(7L)).containsExactly(
                 new IngredientResponse(3L, "鸡蛋", "蛋奶", "枚", "SYSTEM"),
                 new IngredientResponse(4L, "冻豆腐", "豆制品", "块", "HOUSEHOLD"));
+    }
+
+    @Test
+    void includesApprovedIngredientImageUrl() {
+        when(accessService.requireActiveHousehold(7L)).thenReturn(access(7L, 11L));
+        DinnerIngredientEntity egg =
+                ingredient(3L, "SYSTEM", null, "鸡蛋", "蛋奶", "枚", "ACTIVE");
+        egg.setImageAssetId(31L);
+        when(ingredientMapper.selectList(any())).thenReturn(List.of(egg));
+        when(imageAssetService.findApprovedByIds(List.of(31L))).thenReturn(Map.of(
+                31L,
+                new ImageAssetResponse(
+                        31L, "鸡蛋", "https://assets.test/media/ingredients/egg-list.webp",
+                        "https://assets.test/media/ingredients/egg-detail.webp", "source", "author",
+                        "CC0 1.0", "license", LocalDate.of(2026, 8, 3), 640, 400)));
+
+        assertThat(service.listIngredients(7L)).containsExactly(new IngredientResponse(
+                3L, "鸡蛋", "蛋奶", "枚", "SYSTEM",
+                "https://assets.test/media/ingredients/egg-list.webp"));
     }
 
     @Test

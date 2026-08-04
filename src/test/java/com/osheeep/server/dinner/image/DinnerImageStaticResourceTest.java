@@ -37,6 +37,16 @@ class DinnerImageStaticResourceTest {
     }
 
     @Test
+    void ingredientDerivativeCanBeReadWithoutAuthentication() throws Exception {
+        mockMvc.perform(get("/media/ingredients/tomato-list.webp"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Type", containsString("image/webp")))
+                .andExpect(content().bytes(org.springframework.util.StreamUtils.copyToByteArray(
+                        getClass().getResourceAsStream(
+                                "/static/media/ingredients/tomato-list.webp"))));
+    }
+
+    @Test
     void mediaPathDoesNotPermitUnauthenticatedWrites() throws Exception {
         mockMvc.perform(post("/media/recipes/tomato-with-egg-list.webp"))
                 .andExpect(status().isUnauthorized());

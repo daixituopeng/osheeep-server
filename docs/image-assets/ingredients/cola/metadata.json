@@ -1,0 +1,21 @@
+{
+  "provider": "WIKIMEDIA_COMMONS",
+  "displayName": "可乐",
+  "ingredientNames": [
+    "可乐"
+  ],
+  "fileTitle": "Glass cola.jpg",
+  "sourcePageUrl": "https://commons.wikimedia.org/wiki/File:Glass_cola.jpg",
+  "originalFileUrl": "https://upload.wikimedia.org/wikipedia/commons/1/10/Glass_cola.jpg",
+  "author": "pic_p_ter",
+  "licenseName": "Public domain",
+  "licenseUrl": "https://commons.wikimedia.org/wiki/Commons:Copyright_tags#Public_domain",
+  "acquiredOn": "2026-08-03",
+  "sha256": "e66e4106c73dad20266f20ee76746996398090d2ab9bcdd2f2a7b466cda25def",
+  "originalWidth": 2200,
+  "originalHeight": 1704,
+  "originalObjectKey": "internal/ingredients/cola/original.jpg",
+  "listObjectKey": "media/ingredients/cola-list.webp",
+  "detailObjectKey": "media/ingredients/cola-detail.webp",
+  "status": "APPROVED"
+}

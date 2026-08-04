@@ -52,4 +52,11 @@ public record TodayMenuResponse(
                 null, null, null, null, null,
                 null, null, null, null, null, false);
     }
+
+    public static TodayMenuResponse emptyDraft(LocalDate menuDate) {
+        return new TodayMenuResponse(
+                null, menuDate, "DRAFT", 0L,
+                0, 0, 0, List.of(), List.of(),
+                null, null, null, null, null, true);
+    }
 }

@@ -1,0 +1,21 @@
+{
+  "provider": "WIKIMEDIA_COMMONS",
+  "displayName": "鸡胸肉",
+  "ingredientNames": [
+    "鸡胸肉"
+  ],
+  "fileTitle": "Raw chicken slices.jpg",
+  "sourcePageUrl": "https://commons.wikimedia.org/wiki/File:Raw_chicken_slices.jpg",
+  "originalFileUrl": "https://upload.wikimedia.org/wikipedia/commons/b/b8/Raw_chicken_slices.jpg",
+  "author": "kakyusei",
+  "licenseName": "CC0 1.0",
+  "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "acquiredOn": "2026-08-03",
+  "sha256": "3423c813966713a7fdfe01726423110072395c2e19ab64e8708b9b52945a4d1a",
+  "originalWidth": 3888,
+  "originalHeight": 2592,
+  "originalObjectKey": "internal/ingredients/chicken-breast/original.jpg",
+  "listObjectKey": "media/ingredients/chicken-breast-list.webp",
+  "detailObjectKey": "media/ingredients/chicken-breast-detail.webp",
+  "status": "APPROVED"
+}

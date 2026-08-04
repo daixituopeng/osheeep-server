@@ -1,0 +1,21 @@
+{
+  "provider": "WIKIMEDIA_COMMONS",
+  "displayName": "紫菜",
+  "ingredientNames": [
+    "紫菜"
+  ],
+  "fileTitle": "Dried miyeok.jpg",
+  "sourcePageUrl": "https://commons.wikimedia.org/wiki/File:Dried_miyeok.jpg",
+  "originalFileUrl": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Dried_miyeok.jpg",
+  "author": "freddy an",
+  "licenseName": "CC0 1.0",
+  "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "acquiredOn": "2026-08-03",
+  "sha256": "9d3cc71847377e0ca7225afd56aadda232d962dd8f6d06df695f8fffdf9e5b6d",
+  "originalWidth": 1920,
+  "originalHeight": 1280,
+  "originalObjectKey": "internal/ingredients/seaweed/original.jpg",
+  "listObjectKey": "media/ingredients/seaweed-list.webp",
+  "detailObjectKey": "media/ingredients/seaweed-detail.webp",
+  "status": "APPROVED"
+}

@@ -1,0 +1,21 @@
+{
+  "provider": "WIKIMEDIA_COMMONS",
+  "displayName": "牛肉",
+  "ingredientNames": [
+    "牛肉"
+  ],
+  "fileTitle": "Raw beef.jpg",
+  "sourcePageUrl": "https://commons.wikimedia.org/wiki/File:Raw_beef.jpg",
+  "originalFileUrl": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Raw_beef.jpg",
+  "author": "Halima Waziri",
+  "licenseName": "CC BY-SA 4.0",
+  "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0/",
+  "acquiredOn": "2026-08-03",
+  "sha256": "2c05d75e4cab3ca9b9ded1ff009433fc39dbf8b9aa277ae869021a52606dc4c1",
+  "originalWidth": 2560,
+  "originalHeight": 1440,
+  "originalObjectKey": "internal/ingredients/beef/original.jpg",
+  "listObjectKey": "media/ingredients/beef-list.webp",
+  "detailObjectKey": "media/ingredients/beef-detail.webp",
+  "status": "APPROVED"
+}

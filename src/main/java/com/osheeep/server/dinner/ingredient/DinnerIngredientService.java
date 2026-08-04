@@ -12,6 +12,8 @@ import com.osheeep.server.dinner.ingredient.entity.DinnerHouseholdInventoryEntit
 import com.osheeep.server.dinner.ingredient.entity.DinnerIngredientEntity;
 import com.osheeep.server.dinner.ingredient.mapper.DinnerHouseholdInventoryMapper;
 import com.osheeep.server.dinner.ingredient.mapper.DinnerIngredientMapper;
+import com.osheeep.server.dinner.image.DinnerImageAssetService;
+import com.osheeep.server.dinner.image.dto.ImageAssetResponse;
 import com.osheeep.server.dinner.notification.DinnerNotificationPublisher;
 import com.osheeep.server.dinner.notification.DinnerNotificationReferenceType;
 import com.osheeep.server.dinner.notification.DinnerNotificationType;
@@ -38,17 +40,20 @@ public class DinnerIngredientService {
     private final DinnerIngredientMapper ingredientMapper;
     private final DinnerHouseholdInventoryMapper inventoryMapper;
     private final DinnerHouseholdAccessService accessService;
+    private final DinnerImageAssetService imageAssetService;
     private DinnerNotificationPublisher notificationPublisher =
             DinnerNotificationPublisher.noop();
 
     public DinnerIngredientService(
             DinnerIngredientMapper ingredientMapper,
             DinnerHouseholdInventoryMapper inventoryMapper,
-            DinnerHouseholdAccessService accessService
+            DinnerHouseholdAccessService accessService,
+            DinnerImageAssetService imageAssetService
     ) {
         this.ingredientMapper = ingredientMapper;
         this.inventoryMapper = inventoryMapper;
         this.accessService = accessService;
+        this.imageAssetService = imageAssetService;
     }
 
     @Autowired(required = false)
@@ -58,15 +63,21 @@ public class DinnerIngredientService {
 
     public List<IngredientResponse> listIngredients(Long userId) {
         ActiveHouseholdAccess access = accessService.requireActiveHousehold(userId);
-        return ingredientMapper.selectList(Wrappers.<DinnerIngredientEntity>lambdaQuery()
+        List<DinnerIngredientEntity> ingredients = ingredientMapper.selectList(
+                Wrappers.<DinnerIngredientEntity>lambdaQuery()
                         .eq(DinnerIngredientEntity::getStatus, "ACTIVE")
                         .and(ingredient -> ingredient
                                 .eq(DinnerIngredientEntity::getScope, "SYSTEM")
                                 .or()
                                 .eq(DinnerIngredientEntity::getHouseholdId, access.householdId()))
-                        .orderByAsc(DinnerIngredientEntity::getId))
-                .stream()
-                .map(this::toIngredientResponse)
+                        .orderByAsc(DinnerIngredientEntity::getId));
+        Map<Long, ImageAssetResponse> imagesById = imageAssetService.findApprovedByIds(
+                ingredients.stream()
+                        .map(DinnerIngredientEntity::getImageAssetId)
+                        .filter(Objects::nonNull)
+                        .toList());
+        return ingredients.stream()
+                .map(ingredient -> toIngredientResponse(ingredient, imagesById))
                 .toList();
     }
 
@@ -194,13 +205,17 @@ public class DinnerIngredientService {
         return ingredient;
     }
 
-    private IngredientResponse toIngredientResponse(DinnerIngredientEntity ingredient) {
+    private IngredientResponse toIngredientResponse(
+            DinnerIngredientEntity ingredient,
+            Map<Long, ImageAssetResponse> imagesById
+    ) {
+        ImageAssetResponse image = imagesById.get(ingredient.getImageAssetId());
         return new IngredientResponse(
                 ingredient.getId(),
                 ingredient.getName(),
                 ingredient.getCategory(),
-                ingredient.getDefaultUnit(),
-                ingredient.getScope());
+                ingredient.getDefaultUnit(), ingredient.getScope(),
+                image == null ? null : image.listUrl());
     }
 
     private InventoryItemResponse toInventoryResponse(

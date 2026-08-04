@@ -1,0 +1,22 @@
+{
+  "provider": "WIKIMEDIA_COMMONS",
+  "displayName": "酱油",
+  "ingredientNames": [
+    "生抽",
+    "酱油"
+  ],
+  "fileTitle": "Bowl of soy sauce.jpg",
+  "sourcePageUrl": "https://commons.wikimedia.org/wiki/File:Bowl_of_soy_sauce.jpg",
+  "originalFileUrl": "https://upload.wikimedia.org/wikipedia/commons/f/fa/Bowl_of_soy_sauce.jpg",
+  "author": "Bodhi Peace",
+  "licenseName": "CC BY-SA 4.0",
+  "licenseUrl": "https://creativecommons.org/licenses/by-sa/4.0/",
+  "acquiredOn": "2026-08-03",
+  "sha256": "0aac3e9181d57ffd43b9c71483be16b6c743dc4b8ec434230e7a1724a00bfba2",
+  "originalWidth": 5152,
+  "originalHeight": 3864,
+  "originalObjectKey": "internal/ingredients/soy-sauce/original.jpg",
+  "listObjectKey": "media/ingredients/soy-sauce-list.webp",
+  "detailObjectKey": "media/ingredients/soy-sauce-detail.webp",
+  "status": "APPROVED"
+}

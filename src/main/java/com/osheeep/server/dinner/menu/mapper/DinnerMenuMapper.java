@@ -18,6 +18,17 @@ public interface DinnerMenuMapper extends BaseMapper<DinnerMenuEntity> {
             """)
     DinnerMenuEntity selectByHouseholdAndDateForUpdate(Long householdId, LocalDate menuDate);
 
+    @Select("""
+            SELECT * FROM dinner_menus
+            WHERE household_id = #{householdId}
+              AND menu_date BETWEEN #{startDate} AND #{endDate}
+            ORDER BY menu_date
+            """)
+    List<DinnerMenuEntity> selectByHouseholdAndDateRange(
+            @Param("householdId") Long householdId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate);
+
     @Select("SELECT * FROM dinner_menus "
             + "WHERE household_id = #{householdId} AND status <> 'COMPLETED' "
             + "ORDER BY id FOR UPDATE")

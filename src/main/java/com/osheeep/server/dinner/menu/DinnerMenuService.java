@@ -15,6 +15,7 @@ import com.osheeep.server.dinner.menu.dto.MenuMethodChoiceResponse;
 import com.osheeep.server.dinner.menu.dto.MenuMethodResolutionRequest;
 import com.osheeep.server.dinner.menu.dto.MenuSelectionRequest;
 import com.osheeep.server.dinner.menu.dto.TodayMenuResponse;
+import com.osheeep.server.dinner.menu.dto.WeekMenuResponse;
 import com.osheeep.server.dinner.menu.entity.DinnerMenuActionEntity;
 import com.osheeep.server.dinner.menu.entity.DinnerMenuEntity;
 import com.osheeep.server.dinner.menu.entity.DinnerMenuSelectionEntity;
@@ -34,6 +35,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.DayOfWeek;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -131,6 +133,49 @@ public class DinnerMenuService {
     }
 
     @Transactional
+    public TodayMenuResponse scheduled(Long userId, LocalDate menuDate) {
+        LockedHouseholdContext lockedContext =
+                householdAccessService.lockActiveHouseholdContext(userId);
+        ActiveHouseholdAccess access = lockedContext.access();
+        LocalDate businessDate = businessDate(access);
+        requireReadableScheduleDate(menuDate, businessDate);
+        DinnerMenuEntity menu =
+                lockMenuForUpdate(access.householdId(), menuDate);
+        if (menu == null) {
+            return TodayMenuResponse.emptyDraft(menuDate);
+        }
+        return responseForLockedContext(userId, lockedContext, menu);
+    }
+
+    @Transactional
+    public WeekMenuResponse week(Long userId, LocalDate startDate) {
+        LockedHouseholdContext lockedContext =
+                householdAccessService.lockActiveHouseholdContext(userId);
+        ActiveHouseholdAccess access = lockedContext.access();
+        LocalDate businessDate = businessDate(access);
+        requireWeekStart(startDate, businessDate);
+        LocalDate endDate = startDate.plusDays(6);
+        Map<LocalDate, DinnerMenuEntity> menusByDate = new LinkedHashMap<>();
+        for (DinnerMenuEntity menu : menuMapper.selectByHouseholdAndDateRange(
+                access.householdId(), startDate, endDate)) {
+            if (menu == null
+                    || menu.getMenuDate() == null
+                    || menusByDate.putIfAbsent(menu.getMenuDate(), menu) != null) {
+                throw new BusinessException(ErrorCode.BUSINESS_ERROR);
+            }
+        }
+        List<TodayMenuResponse> menus = new ArrayList<>();
+        for (int index = 0; index < 7; index++) {
+            LocalDate date = startDate.plusDays(index);
+            DinnerMenuEntity menu = menusByDate.get(date);
+            menus.add(menu == null
+                    ? TodayMenuResponse.emptyDraft(date)
+                    : responseForLockedContext(userId, lockedContext, menu));
+        }
+        return new WeekMenuResponse(startDate, endDate, List.copyOf(menus));
+    }
+
+    @Transactional
     public TodayMenuResponse updateSelections(
             Long userId,
             List<Long> requestedRecipeIds,
@@ -147,12 +192,53 @@ public class DinnerMenuService {
     }
 
     @Transactional
+    public TodayMenuResponse updateScheduledSelections(
+            Long userId,
+            LocalDate menuDate,
+            List<Long> requestedRecipeIds,
+            long expectedVersion
+    ) {
+        List<MenuSelectionRequest> requestedSelections = requestedRecipeIds == null
+                ? List.of()
+                : requestedRecipeIds.stream()
+                        .filter(Objects::nonNull)
+                        .distinct()
+                        .map(recipeId -> new MenuSelectionRequest(recipeId, null))
+                        .toList();
+        return updateScheduledMethodSelections(
+                userId, menuDate, requestedSelections, expectedVersion);
+    }
+
+    @Transactional
     public TodayMenuResponse updateMethodSelections(
             Long userId,
             List<MenuSelectionRequest> requestedSelections,
             long expectedVersion
     ) {
-        MenuContext context = lockToday(userId);
+        return updateMethodSelections(
+                userId, lockToday(userId), requestedSelections, expectedVersion);
+    }
+
+    @Transactional
+    public TodayMenuResponse updateScheduledMethodSelections(
+            Long userId,
+            LocalDate menuDate,
+            List<MenuSelectionRequest> requestedSelections,
+            long expectedVersion
+    ) {
+        return updateMethodSelections(
+                userId,
+                lockScheduled(userId, menuDate, true),
+                requestedSelections,
+                expectedVersion);
+    }
+
+    private TodayMenuResponse updateMethodSelections(
+            Long userId,
+            MenuContext context,
+            List<MenuSelectionRequest> requestedSelections,
+            long expectedVersion
+    ) {
         DinnerMenuEntity menu = context.menu();
         requireVersion(menu, expectedVersion);
         requireMutable(menu);
@@ -580,6 +666,50 @@ public class DinnerMenuService {
             throw new BusinessException(ErrorCode.BUSINESS_ERROR, "Today's dinner menu was not initialized");
         }
         return new MenuContext(lockedContext, menu);
+    }
+
+    private MenuContext lockScheduled(
+            Long userId,
+            LocalDate menuDate,
+            boolean requireEditable
+    ) {
+        LockedHouseholdContext lockedContext =
+                householdAccessService.lockActiveHouseholdContext(userId);
+        ActiveHouseholdAccess access = lockedContext.access();
+        LocalDate businessDate = businessDate(access);
+        requireReadableScheduleDate(menuDate, businessDate);
+        if (requireEditable && menuDate.isBefore(businessDate)) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR);
+        }
+        DinnerMenuEntity menu =
+                lockMenuForUpdate(access.householdId(), menuDate);
+        if (menu == null) {
+            menu = createDraftLocked(access.householdId(), menuDate);
+        }
+        return new MenuContext(lockedContext, menu);
+    }
+
+    private LocalDate businessDate(ActiveHouseholdAccess access) {
+        return businessDateResolver.resolve(access.timezone(), clock.instant());
+    }
+
+    private void requireReadableScheduleDate(
+            LocalDate menuDate,
+            LocalDate businessDate
+    ) {
+        if (menuDate == null
+                || menuDate.isBefore(businessDate.minusDays(42))
+                || menuDate.isAfter(businessDate.plusDays(42))) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR);
+        }
+    }
+
+    private void requireWeekStart(LocalDate startDate, LocalDate businessDate) {
+        requireReadableScheduleDate(startDate, businessDate);
+        if (startDate.getDayOfWeek() != DayOfWeek.MONDAY
+                || startDate.plusDays(6).isAfter(businessDate.plusDays(42))) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR);
+        }
     }
 
     private DinnerMenuEntity lockMenuForUpdate(Long householdId, LocalDate menuDate) {

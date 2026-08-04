@@ -1,0 +1,21 @@
+{
+  "provider": "WIKIMEDIA_COMMONS",
+  "displayName": "土豆",
+  "ingredientNames": [
+    "土豆"
+  ],
+  "fileTitle": "Cut Potatoes.jpg",
+  "sourcePageUrl": "https://commons.wikimedia.org/wiki/File:Cut_Potatoes.jpg",
+  "originalFileUrl": "https://upload.wikimedia.org/wikipedia/commons/2/25/Cut_Potatoes.jpg",
+  "author": "Alabama Extension",
+  "licenseName": "CC0 1.0",
+  "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "acquiredOn": "2026-08-03",
+  "sha256": "eebe9cb54286f9be151e3db87c4b473d8515aabcbfbf6019cb979bb91a439c25",
+  "originalWidth": 4476,
+  "originalHeight": 2769,
+  "originalObjectKey": "internal/ingredients/potato/original.jpg",
+  "listObjectKey": "media/ingredients/potato-list.webp",
+  "detailObjectKey": "media/ingredients/potato-detail.webp",
+  "status": "APPROVED"
+}

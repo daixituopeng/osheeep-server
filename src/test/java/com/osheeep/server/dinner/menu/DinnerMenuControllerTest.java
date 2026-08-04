@@ -19,6 +19,7 @@ import com.osheeep.server.dinner.menu.dto.TodayMenuResponse;
 import com.osheeep.server.dinner.menu.dto.MenuDishResponse;
 import com.osheeep.server.dinner.menu.dto.MenuMethodResolutionRequest;
 import com.osheeep.server.dinner.menu.dto.MenuSelectionRequest;
+import com.osheeep.server.dinner.menu.dto.WeekMenuResponse;
 import com.osheeep.server.dinner.recipe.DinnerRecipeService;
 import com.osheeep.server.dinner.recipe.dto.RecipeMethodSummaryResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeResponse;
@@ -124,6 +125,42 @@ class DinnerMenuControllerTest {
                 .andExpect(jsonPath("$.data.recordId").doesNotExist())
                 .andExpect(jsonPath("$.data.selectedRecipeIds").doesNotExist())
                 .andExpect(jsonPath("$.data.dishes").doesNotExist());
+    }
+
+    @Test
+    void readsAndUpdatesDatedMenusAndTheCurrentWeek() throws Exception {
+        LocalDate date = LocalDate.of(2026, 7, 13);
+        TodayMenuResponse dated = new TodayMenuResponse(
+                41L, date, "DRAFT", 2L,
+                0, 0, 0, List.of(), List.of(),
+                null, null, null, null, null);
+        when(menuService.scheduled(7L, date)).thenReturn(dated);
+        when(menuService.week(7L, date)).thenReturn(
+                new WeekMenuResponse(date, date.plusDays(6), List.of(dated)));
+        when(menuService.updateScheduledSelections(
+                7L, date, List.of(1L, 2L), 2L))
+                .thenReturn(new TodayMenuResponse(
+                        41L, date, "DRAFT", 3L,
+                        2, 0, 0, List.of(1L, 2L), List.of(),
+                        null, null, null, null, null));
+
+        mockMvc.perform(authenticated(get("/api/dinner/menus/2026-07-13")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.menuDate").value("2026-07-13"))
+                .andExpect(jsonPath("$.data.version").value(2));
+        mockMvc.perform(authenticated(
+                        get("/api/dinner/menus/week").param("start", "2026-07-13")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.startDate").value("2026-07-13"))
+                .andExpect(jsonPath("$.data.menus[0].menuDate")
+                        .value("2026-07-13"));
+        mockMvc.perform(authenticated(
+                        put("/api/dinner/menus/2026-07-13/selections"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"recipeIds\":[1,2],\"version\":2}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.version").value(3))
+                .andExpect(jsonPath("$.data.selectedRecipeIds[1]").value(2));
     }
 
     @Test

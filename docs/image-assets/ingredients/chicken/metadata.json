@@ -1,0 +1,21 @@
+{
+  "provider": "WIKIMEDIA_COMMONS",
+  "displayName": "鸡肉",
+  "ingredientNames": [
+    "鸡肉"
+  ],
+  "fileTitle": "Breast chicken.jpg",
+  "sourcePageUrl": "https://commons.wikimedia.org/wiki/File:Breast_chicken.jpg",
+  "originalFileUrl": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Breast_chicken.jpg",
+  "author": "ReshmaNazeerhussain",
+  "licenseName": "CC0 1.0",
+  "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "acquiredOn": "2026-08-03",
+  "sha256": "9447ca4c934c179e32c61dbd030fb5df6d56d314e08b7f758e97ee4c0e98b5e1",
+  "originalWidth": 960,
+  "originalHeight": 1280,
+  "originalObjectKey": "internal/ingredients/chicken/original.jpg",
+  "listObjectKey": "media/ingredients/chicken-list.webp",
+  "detailObjectKey": "media/ingredients/chicken-detail.webp",
+  "status": "APPROVED"
+}

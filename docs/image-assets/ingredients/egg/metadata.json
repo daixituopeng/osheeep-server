@@ -1,0 +1,21 @@
+{
+  "provider": "WIKIMEDIA_COMMONS",
+  "displayName": "鸡蛋",
+  "ingredientNames": [
+    "鸡蛋"
+  ],
+  "fileTitle": "Ten chicken eggs.jpg",
+  "sourcePageUrl": "https://commons.wikimedia.org/wiki/File:Ten_chicken_eggs.jpg",
+  "originalFileUrl": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Ten_chicken_eggs.jpg",
+  "author": "Achim55",
+  "licenseName": "CC0 1.0",
+  "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "acquiredOn": "2026-08-03",
+  "sha256": "736aed2f8af338c2d66863df317a6716a8fc16a8126c0e2c59a9e0eb1bf74249",
+  "originalWidth": 2048,
+  "originalHeight": 1536,
+  "originalObjectKey": "internal/ingredients/egg/original.jpg",
+  "listObjectKey": "media/ingredients/egg-list.webp",
+  "detailObjectKey": "media/ingredients/egg-detail.webp",
+  "status": "APPROVED"
+}

@@ -5,6 +5,16 @@ public record IngredientResponse(
         String name,
         String category,
         String defaultUnit,
-        String scope
+        String scope,
+        String imageUrl
 ) {
+    public IngredientResponse(
+            Long id,
+            String name,
+            String category,
+            String defaultUnit,
+            String scope
+    ) {
+        this(id, name, category, defaultUnit, scope, null);
+    }
 }

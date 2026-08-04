@@ -19,6 +19,7 @@ public class DinnerIngredientEntity {
     private String name;
     private String category;
     @TableField("default_unit") private String defaultUnit;
+    @TableField("image_asset_id") private Long imageAssetId;
     private String status;
     @TableField("created_at") private LocalDateTime createdAt;
     @TableField("updated_at") private LocalDateTime updatedAt;
@@ -37,6 +38,8 @@ public class DinnerIngredientEntity {
     public void setCategory(String category) { this.category = category; }
     public String getDefaultUnit() { return defaultUnit; }
     public void setDefaultUnit(String defaultUnit) { this.defaultUnit = defaultUnit; }
+    public Long getImageAssetId() { return imageAssetId; }
+    public void setImageAssetId(Long imageAssetId) { this.imageAssetId = imageAssetId; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
     public LocalDateTime getCreatedAt() { return createdAt; }

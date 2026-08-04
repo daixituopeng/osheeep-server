@@ -1,0 +1,21 @@
+{
+  "provider": "WIKIMEDIA_COMMONS",
+  "displayName": "糖",
+  "ingredientNames": [
+    "糖"
+  ],
+  "fileTitle": "A Bowl of Sugar.jpg",
+  "sourcePageUrl": "https://commons.wikimedia.org/wiki/File:A_Bowl_of_Sugar.jpg",
+  "originalFileUrl": "https://upload.wikimedia.org/wikipedia/commons/1/12/A_Bowl_of_Sugar.jpg",
+  "author": "Sparkveela",
+  "licenseName": "CC0 1.0",
+  "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "acquiredOn": "2026-08-03",
+  "sha256": "334840f0fc1aaf68c6eb0acdfa8874ec49c2001dcc060f84c2b5a632cee0b2a9",
+  "originalWidth": 4000,
+  "originalHeight": 3000,
+  "originalObjectKey": "internal/ingredients/sugar/original.jpg",
+  "listObjectKey": "media/ingredients/sugar-list.webp",
+  "detailObjectKey": "media/ingredients/sugar-detail.webp",
+  "status": "APPROVED"
+}

@@ -1,0 +1,21 @@
+{
+  "provider": "WIKIMEDIA_COMMONS",
+  "displayName": "面条",
+  "ingredientNames": [
+    "面条"
+  ],
+  "fileTitle": "晒干的手工鲜面条.jpg",
+  "sourcePageUrl": "https://commons.wikimedia.org/wiki/File:%E6%99%92%E5%B9%B2%E7%9A%84%E6%89%8B%E5%B7%A5%E9%B2%9C%E9%9D%A2%E6%9D%A1.jpg",
+  "originalFileUrl": "https://commons.wikimedia.org/wiki/Special:Redirect/file/%E6%99%92%E5%B9%B2%E7%9A%84%E6%89%8B%E5%B7%A5%E9%B2%9C%E9%9D%A2%E6%9D%A1.jpg",
+  "author": "Suginami",
+  "licenseName": "CC0 1.0",
+  "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "acquiredOn": "2026-08-03",
+  "sha256": "2b238510b26d9f61d74402a53fd425b145b844b5225400c55654155e980b8640",
+  "originalWidth": 1706,
+  "originalHeight": 1279,
+  "originalObjectKey": "internal/ingredients/noodles/original.jpg",
+  "listObjectKey": "media/ingredients/noodles-list.webp",
+  "detailObjectKey": "media/ingredients/noodles-detail.webp",
+  "status": "APPROVED"
+}

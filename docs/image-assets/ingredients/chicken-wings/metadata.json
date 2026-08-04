@@ -1,0 +1,21 @@
+{
+  "provider": "WIKIMEDIA_COMMONS",
+  "displayName": "鸡翅",
+  "ingredientNames": [
+    "鸡翅"
+  ],
+  "fileTitle": "Raw chicken wings.jpg",
+  "sourcePageUrl": "https://commons.wikimedia.org/wiki/File:Raw_chicken_wings.jpg",
+  "originalFileUrl": "https://commons.wikimedia.org/wiki/Special:Redirect/file/Raw_chicken_wings.jpg",
+  "author": "ProjectManhattan",
+  "licenseName": "CC BY-SA 3.0",
+  "licenseUrl": "https://creativecommons.org/licenses/by-sa/3.0/",
+  "acquiredOn": "2026-08-03",
+  "sha256": "6200d4f88afd848e6afafec09fad2b71de5af06a91830408c8ecf8d052491c8e",
+  "originalWidth": 1840,
+  "originalHeight": 2211,
+  "originalObjectKey": "internal/ingredients/chicken-wings/original.jpg",
+  "listObjectKey": "media/ingredients/chicken-wings-list.webp",
+  "detailObjectKey": "media/ingredients/chicken-wings-detail.webp",
+  "status": "APPROVED"
+}

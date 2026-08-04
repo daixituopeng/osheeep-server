@@ -1,0 +1,21 @@
+{
+  "provider": "WIKIMEDIA_COMMONS",
+  "displayName": "西兰花",
+  "ingredientNames": [
+    "西兰花"
+  ],
+  "fileTitle": "Broccoli vegetable.jpg",
+  "sourcePageUrl": "https://commons.wikimedia.org/wiki/File:Broccoli_vegetable.jpg",
+  "originalFileUrl": "https://upload.wikimedia.org/wikipedia/commons/9/98/Broccoli_vegetable.jpg",
+  "author": "Jon Sullivan",
+  "licenseName": "Public domain",
+  "licenseUrl": "https://commons.wikimedia.org/wiki/Commons:Copyright_tags#Public_domain",
+  "acquiredOn": "2026-08-03",
+  "sha256": "cd6e2bd15458f1e88c8839d57dee1510d87bedce1e50600bca4f55e6d1e00941",
+  "originalWidth": 1280,
+  "originalHeight": 960,
+  "originalObjectKey": "internal/ingredients/broccoli/original.jpg",
+  "listObjectKey": "media/ingredients/broccoli-list.webp",
+  "detailObjectKey": "media/ingredients/broccoli-detail.webp",
+  "status": "APPROVED"
+}

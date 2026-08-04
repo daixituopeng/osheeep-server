@@ -1,0 +1,21 @@
+{
+  "provider": "WIKIMEDIA_COMMONS",
+  "displayName": "葱",
+  "ingredientNames": [
+    "葱"
+  ],
+  "fileTitle": "Spring Onion.jpg",
+  "sourcePageUrl": "https://commons.wikimedia.org/wiki/File:Spring_Onion.jpg",
+  "originalFileUrl": "https://upload.wikimedia.org/wikipedia/commons/9/9c/Spring_Onion.jpg",
+  "author": "Donovan Govan",
+  "licenseName": "CC BY-SA 3.0",
+  "licenseUrl": "https://creativecommons.org/licenses/by-sa/3.0/",
+  "acquiredOn": "2026-08-03",
+  "sha256": "0289118d773a7414f5c1af048e3bbb5b26b97b532e3b3f305567f7db8b9c1ba5",
+  "originalWidth": 1988,
+  "originalHeight": 1259,
+  "originalObjectKey": "internal/ingredients/spring-onion/original.jpg",
+  "listObjectKey": "media/ingredients/spring-onion-list.webp",
+  "detailObjectKey": "media/ingredients/spring-onion-detail.webp",
+  "status": "APPROVED"
+}

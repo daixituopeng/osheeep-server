@@ -1,0 +1,21 @@
+{
+  "provider": "WIKIMEDIA_COMMONS",
+  "displayName": "蒜",
+  "ingredientNames": [
+    "蒜"
+  ],
+  "fileTitle": "Garlic cloves.jpg",
+  "sourcePageUrl": "https://commons.wikimedia.org/wiki/File:Garlic_cloves.jpg",
+  "originalFileUrl": "https://upload.wikimedia.org/wikipedia/commons/f/f1/Garlic_cloves.jpg",
+  "author": "Leon Brooks",
+  "licenseName": "Public domain",
+  "licenseUrl": "https://commons.wikimedia.org/wiki/Commons:Copyright_tags#Public_domain",
+  "acquiredOn": "2026-08-03",
+  "sha256": "51b11a9982d0cafde2f32b68bd8c2edc84afc06030c415746675be1f3d59f006",
+  "originalWidth": 3976,
+  "originalHeight": 2978,
+  "originalObjectKey": "internal/ingredients/garlic/original.jpg",
+  "listObjectKey": "media/ingredients/garlic-list.webp",
+  "detailObjectKey": "media/ingredients/garlic-detail.webp",
+  "status": "APPROVED"
+}

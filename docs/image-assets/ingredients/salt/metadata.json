@@ -1,0 +1,21 @@
+{
+  "provider": "WIKIMEDIA_COMMONS",
+  "displayName": "盐",
+  "ingredientNames": [
+    "盐"
+  ],
+  "fileTitle": "Salt-crystals.jpg",
+  "sourcePageUrl": "https://commons.wikimedia.org/wiki/File:Salt-crystals.jpg",
+  "originalFileUrl": "https://upload.wikimedia.org/wikipedia/commons/9/97/Salt-crystals.jpg",
+  "author": "Nate Steiner",
+  "licenseName": "CC0 1.0",
+  "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "acquiredOn": "2026-08-03",
+  "sha256": "e6f758cefcd7dc446e5c7420db82685d8be73d792f7fcd9af2b74a484354b1d9",
+  "originalWidth": 2288,
+  "originalHeight": 1712,
+  "originalObjectKey": "internal/ingredients/salt/original.jpg",
+  "listObjectKey": "media/ingredients/salt-list.webp",
+  "detailObjectKey": "media/ingredients/salt-detail.webp",
+  "status": "APPROVED"
+}

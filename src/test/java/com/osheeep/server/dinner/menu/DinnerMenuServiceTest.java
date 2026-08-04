@@ -157,6 +157,71 @@ class DinnerMenuServiceTest {
     }
 
     @Test
+    void weekReturnsExistingMenusAndEmptyDraftsForUnscheduledDays() {
+        LocalDate monday = LocalDate.of(2026, 7, 6);
+        DinnerMenuEntity existing = menu(31L);
+        existing.setMenuDate(LocalDate.of(2026, 7, 11));
+        when(householdAccessService.lockActiveHouseholdContext(7L))
+                .thenReturn(lockedContext(access()));
+        when(menuMapper.selectByHouseholdAndDateRange(
+                11L, monday, monday.plusDays(6)))
+                .thenReturn(List.of(existing));
+        when(selectionMapper.selectList(any())).thenReturn(List.of());
+
+        var result = service.week(7L, monday);
+
+        assertThat(result.startDate()).isEqualTo(monday);
+        assertThat(result.endDate()).isEqualTo(LocalDate.of(2026, 7, 12));
+        assertThat(result.menus()).hasSize(7);
+        assertThat(result.menus().get(4).id()).isNull();
+        assertThat(result.menus().get(4).status()).isEqualTo("DRAFT");
+        assertThat(result.menus().get(5).id()).isEqualTo(31L);
+    }
+
+    @Test
+    void scheduledReadsAnUnplannedFutureDayWithoutPersistingADraft() {
+        LocalDate futureDate = LocalDate.of(2026, 7, 13);
+        when(householdAccessService.lockActiveHouseholdContext(7L))
+                .thenReturn(lockedContext(access()));
+        when(menuMapper.selectByHouseholdAndDateForUpdate(11L, futureDate))
+                .thenReturn(null);
+
+        var result = service.scheduled(7L, futureDate);
+
+        assertThat(result.id()).isNull();
+        assertThat(result.menuDate()).isEqualTo(futureDate);
+        assertThat(result.status()).isEqualTo("DRAFT");
+        assertThat(result.version()).isZero();
+        verify(menuMapper, never()).insert(any(DinnerMenuEntity.class));
+    }
+
+    @Test
+    void updatingScheduledSelectionsCreatesTheDraftForTheRequestedDate() {
+        LocalDate futureDate = LocalDate.of(2026, 7, 13);
+        when(householdAccessService.lockActiveHouseholdContext(7L))
+                .thenReturn(lockedContext(access()));
+        when(menuMapper.selectByHouseholdAndDateForUpdate(11L, futureDate))
+                .thenReturn(null);
+        when(menuMapper.insert(any(DinnerMenuEntity.class)))
+                .thenAnswer(invocation -> {
+                    invocation.<DinnerMenuEntity>getArgument(0).setId(41L);
+                    return 1;
+                });
+        when(selectionMapper.selectList(any())).thenReturn(List.of());
+
+        var result = service.updateScheduledSelections(
+                7L, futureDate, List.of(), 0L);
+
+        assertThat(result.id()).isEqualTo(41L);
+        assertThat(result.menuDate()).isEqualTo(futureDate);
+        ArgumentCaptor<DinnerMenuEntity> inserted =
+                ArgumentCaptor.forClass(DinnerMenuEntity.class);
+        verify(menuMapper).insert(inserted.capture());
+        assertThat(inserted.getValue().getMenuDate()).isEqualTo(futureDate);
+        assertThat(inserted.getValue().getStatus()).isEqualTo("DRAFT");
+    }
+
+    @Test
     void updateSelectionsPersistsAnExplicitActiveMethod() {
         DinnerMenuEntity menu = menu(31L);
         DinnerRecipeEntity family = publishedHouseholdRecipe(14L, 11L, 8L, 91L);
