@@ -110,6 +110,8 @@ class ProductionDeploymentContractTest {
         assertThat(locations).contains("location = /healthz");
         assertThat(locations).contains("access_log off;");
         assertThat(locations).contains("proxy_pass http://127.0.0.1:8080/actuator/health;");
+        assertThat(locations).contains("location /media/");
+        assertThat(locations).contains("proxy_pass http://127.0.0.1:8080;");
         assertThat(locations).contains("limit_req zone=osheeep_auth burst=5 nodelay;");
         assertThat(locations).contains("limit_req zone=osheeep_api burst=60 nodelay;");
         assertThat(locations).contains("limit_conn osheeep_conn 20;");
