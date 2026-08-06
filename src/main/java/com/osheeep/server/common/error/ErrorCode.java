@@ -67,6 +67,9 @@ public enum ErrorCode {
     DINNER_INVENTORY_VERSION_CONFLICT(
             HttpStatus.CONFLICT, "Dinner inventory was updated by another member"),
     DINNER_INVENTORY_ITEM_NOT_FOUND(HttpStatus.NOT_FOUND, "Dinner inventory item was not found"),
+    DINNER_SHOPPING_INVALID(HttpStatus.BAD_REQUEST, "Dinner shopping request is invalid"),
+    DINNER_SHOPPING_CONFLICT(
+            HttpStatus.CONFLICT, "Dinner shopping list changed while the request was running"),
     DINNER_INVENTORY_DEDUCTION_INVALID(
             HttpStatus.BAD_REQUEST, "Dinner inventory deduction is invalid"),
     DINNER_INVENTORY_DEDUCTION_CONFLICT(
