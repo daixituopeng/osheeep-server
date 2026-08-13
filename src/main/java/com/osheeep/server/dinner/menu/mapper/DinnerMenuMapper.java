@@ -54,4 +54,13 @@ public interface DinnerMenuMapper extends BaseMapper<DinnerMenuEntity> {
     int resetUncompletedMenus(
             @Param("householdId") Long householdId,
             @Param("menuIds") List<Long> menuIds);
+
+    @Update("UPDATE dinner_menus "
+            + "SET status = 'DRAFT', confirmed_by = NULL, confirmed_at = NULL, "
+            + "version = version + 1 "
+            + "WHERE id = #{menuId} AND status = 'CONFIRMED' "
+            + "AND version = #{expectedVersion}")
+    int clearConfirmationAndAdvanceVersion(
+            @Param("menuId") Long menuId,
+            @Param("expectedVersion") Long expectedVersion);
 }

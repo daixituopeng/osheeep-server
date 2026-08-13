@@ -3,6 +3,7 @@ package com.osheeep.server.dinner.record;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -10,8 +11,6 @@ import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
-import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
-import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.osheeep.server.common.error.BusinessException;
 import com.osheeep.server.common.error.ErrorCode;
@@ -38,7 +37,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -57,13 +56,14 @@ class DinnerRecordSnapshotAssemblerTest {
     void setUp() {
         MapperBuilderAssistant assistant =
                 new MapperBuilderAssistant(new MybatisConfiguration(), "test");
+        TableInfoHelper.initTableInfo(assistant, DinnerRecipeMethodEntity.class);
         TableInfoHelper.initTableInfo(assistant, DinnerRecipeMethodStepEntity.class);
         assembler = new DinnerRecordSnapshotAssembler(
                 recipeMapper, ingredientMapper, methodMapper, stepMapper, imageAssetService);
     }
 
     @Test
-    void assemblesSystemAndMultipleHouseholdSnapshotsWithFiveBatchOperations() {
+    void freezesAllSelectedRecipesWithOneDeterministicallyOrderedLockBatchPerTable() {
         DinnerRecipeEntity system = systemRecipe(1L, null);
         DinnerRecipeEntity firstFamily = householdRecipe(14L, 70L, 8L, 2, 91L);
         DinnerRecipeEntity secondFamily = householdRecipe(15L, 70L, 3L, 4, 92L);
@@ -72,7 +72,7 @@ class DinnerRecordSnapshotAssemblerTest {
                 householdSelection(15L, 9L, 3L, 22L),
                 systemSelection(1L, 7L),
                 householdSelection(14L, 7L, 8L, 21L));
-        when(recipeMapper.selectByIds(List.of(1L, 14L, 15L)))
+        when(recipeMapper.selectByIdsForUpdate(List.of(1L, 14L, 15L)))
                 .thenReturn(List.of(secondFamily, firstFamily, system));
         when(ingredientMapper.selectWithIngredientNames(List.of(1L, 14L, 15L)))
                 .thenReturn(List.of(
@@ -83,10 +83,10 @@ class DinnerRecordSnapshotAssemblerTest {
                 ingredient(14L, 201L, "鸡蛋", true, 0,
                         "HOUSEHOLD", 70L, "ACTIVE"),
                 ingredient(1L, 101L, "番茄", true, 0)));
-        when(methodMapper.selectByIds(List.of(21L, 22L))).thenReturn(List.of(
+        when(methodMapper.selectByRecipeIdsForUpdate(List.of(1L, 14L, 15L))).thenReturn(List.of(
                 method(22L, 15L, "炖煮做法", "炖"),
                 method(21L, 14L, "家常做法", "炒")));
-        when(stepMapper.selectList(any())).thenReturn(List.of(
+        when(stepMapper.selectByMethodIdsForUpdate(List.of(21L, 22L))).thenReturn(List.of(
                 step(401L, 22L, "慢炖", 0),
                 step(302L, 21L, "盛盘", 1),
                 step(301L, 21L, "翻炒", 0)));
@@ -122,17 +122,20 @@ class DinnerRecordSnapshotAssemblerTest {
                 .extracting(ingredient -> ingredient.ingredientId())
                 .containsExactly(301L);
 
-        verify(recipeMapper).selectByIds(List.of(1L, 14L, 15L));
+        List<Long> sortedRecipeIds = List.of(1L, 14L, 15L);
+        List<Long> sortedMethodIds = List.of(21L, 22L);
+        verify(recipeMapper).selectByIdsForUpdate(sortedRecipeIds);
+        verify(ingredientMapper).selectByRecipeIdsForUpdate(sortedRecipeIds);
         verify(ingredientMapper).selectWithIngredientNames(List.of(1L, 14L, 15L));
-        verify(methodMapper).selectByIds(List.of(21L, 22L));
-        ArgumentCaptor<Wrapper<DinnerRecipeMethodStepEntity>> stepQuery = wrapperCaptor();
-        verify(stepMapper).selectList(stepQuery.capture());
-        AbstractWrapper<?, ?, ?> capturedStepQuery =
-                (AbstractWrapper<?, ?, ?>) stepQuery.getValue();
-        capturedStepQuery.getSqlSegment();
-        assertThat(capturedStepQuery.getParamNameValuePairs().values())
-                .containsExactlyInAnyOrder(21L, 22L);
+        verify(methodMapper).selectByRecipeIdsForUpdate(sortedRecipeIds);
+        verify(stepMapper).selectByMethodIdsForUpdate(sortedMethodIds);
         verify(imageAssetService).findApprovedByIds(List.of(91L, 92L));
+        InOrder lockOrder = inOrder(
+                recipeMapper, ingredientMapper, methodMapper, stepMapper);
+        lockOrder.verify(recipeMapper).selectByIdsForUpdate(sortedRecipeIds);
+        lockOrder.verify(ingredientMapper).selectByRecipeIdsForUpdate(sortedRecipeIds);
+        lockOrder.verify(methodMapper).selectByRecipeIdsForUpdate(sortedRecipeIds);
+        lockOrder.verify(stepMapper).selectByMethodIdsForUpdate(sortedMethodIds);
         verifyNoMoreInteractions(
                 recipeMapper, ingredientMapper, methodMapper, stepMapper, imageAssetService);
     }
@@ -142,6 +145,93 @@ class DinnerRecordSnapshotAssemblerTest {
         assertInvalid(() -> assembler.assemble(70L, List.of()));
         verifyNoInteractions(
                 recipeMapper, ingredientMapper, methodMapper, stepMapper, imageAssetService);
+    }
+
+    @Test
+    void currentSystemRecipeFreezesAPublishedSnapshotForTheAddingUser() {
+        DinnerRecipeEntity system = systemRecipe(1L, null);
+        when(recipeMapper.selectByIdsForUpdate(List.of(1L))).thenReturn(List.of(system));
+        when(ingredientMapper.selectWithIngredientNames(List.of(1L)))
+                .thenReturn(List.of(ingredient(1L, 101L, "番茄", true, 0)));
+
+        var draft = assembler.assembleCurrentRecipe(70L, 7L, 1L, null);
+
+        assertThat(draft.recipeId()).isEqualTo(1L);
+        assertThat(draft.scope()).isEqualTo("SYSTEM");
+        assertThat(draft.recipeVersion()).isEqualTo(1L);
+        assertThat(draft.selectedByUserIds()).containsExactly(7L);
+        assertThat(draft.methodId()).isNull();
+        assertThat(draft.ingredients())
+                .extracting(ingredient -> ingredient.name())
+                .containsExactly("番茄");
+        verifyNoInteractions(methodMapper, stepMapper, imageAssetService);
+    }
+
+    @Test
+    void currentHouseholdRecipeFreezesItsActiveDefaultMethodForTheAddingUser() {
+        DinnerRecipeEntity family = householdRecipe(14L, 70L, 8L, 2, 91L);
+        DinnerRecipeMethodEntity defaultMethod =
+                method(21L, 14L, "家常做法", "炒");
+        defaultMethod.setIsDefault(true);
+        defaultMethod.setEstimatedMinutes(12);
+        stubHouseholdAggregate(
+                family,
+                validIngredients(14L),
+                List.of(defaultMethod),
+                List.of(step(301L, 21L, "翻炒", 0)),
+                Map.of(91L, approvedImage(91L)));
+
+        var draft = assembler.assembleCurrentRecipe(70L, 7L, 14L, null);
+
+        assertThat(draft.recipeId()).isEqualTo(14L);
+        assertThat(draft.scope()).isEqualTo("HOUSEHOLD");
+        assertThat(draft.recipeVersion()).isEqualTo(8L);
+        assertThat(draft.selectedByUserIds()).containsExactly(7L);
+        assertThat(draft.methodId()).isEqualTo(21L);
+        assertThat(draft.methodEstimatedMinutes()).isEqualTo(12);
+        assertThat(draft.steps())
+                .extracting(step -> step.instruction())
+                .containsExactly("翻炒");
+        assertThat(draft.imagePath())
+                .isEqualTo("https://www.osheeep.com/media/recipes/family-list.webp");
+        verify(methodMapper).selectByRecipeIdsForUpdate(List.of(14L));
+    }
+
+    @Test
+    void currentRecipeAddRejectsAnotherHouseholdsRecipeBeforeAggregateReads() {
+        DinnerRecipeEntity foreign = householdRecipe(14L, 71L, 8L, 2, 91L);
+        when(recipeMapper.selectByIdsForUpdate(List.of(14L))).thenReturn(List.of(foreign));
+
+        assertInvalid(() -> assembler.assembleCurrentRecipe(70L, 7L, 14L, 21L));
+
+        verifyNoInteractions(ingredientMapper, methodMapper, stepMapper, imageAssetService);
+    }
+
+    @Test
+    void currentRecipeAddRejectsAnArchivedRecipeBeforeAggregateReads() {
+        DinnerRecipeEntity archived = householdRecipe(14L, 70L, 8L, 2, 91L);
+        archived.setStatus("ARCHIVED");
+        when(recipeMapper.selectByIdsForUpdate(List.of(14L))).thenReturn(List.of(archived));
+
+        assertInvalid(() -> assembler.assembleCurrentRecipe(70L, 7L, 14L, 21L));
+
+        verifyNoInteractions(ingredientMapper, methodMapper, stepMapper, imageAssetService);
+    }
+
+    @Test
+    void currentRecipeAddRejectsAnInactiveRequestedMethodBeforeAggregateReads() {
+        DinnerRecipeEntity family = householdRecipe(14L, 70L, 8L, 2, 91L);
+        DinnerRecipeMethodEntity inactive = method(21L, 14L, "旧做法", "炒");
+        inactive.setStatus("INACTIVE");
+        when(recipeMapper.selectByIdsForUpdate(List.of(14L))).thenReturn(List.of(family));
+        when(methodMapper.selectByRecipeIdsForUpdate(List.of(14L)))
+                .thenReturn(List.of(inactive));
+
+        assertInvalid(() -> assembler.assembleCurrentRecipe(70L, 7L, 14L, 21L));
+
+        verify(ingredientMapper).selectByRecipeIdsForUpdate(List.of(14L));
+        verify(ingredientMapper).selectWithIngredientNames(List.of(14L));
+        verifyNoInteractions(stepMapper, imageAssetService);
     }
 
     @Test
@@ -204,10 +294,11 @@ class DinnerRecordSnapshotAssemblerTest {
     @Test
     void methodMustBelongToSelectedRecipe() {
         DinnerRecipeEntity family = householdRecipe(14L, 70L, 8L, 2, 91L);
-        stubHouseholdAggregate(family, validIngredients(14L),
-                List.of(method(21L, 15L, "错误做法", "炒")),
-                List.of(step(301L, 21L, "翻炒", 0)),
-                Map.of(91L, approvedImage(91L)));
+        when(recipeMapper.selectByIdsForUpdate(List.of(14L))).thenReturn(List.of(family));
+        when(ingredientMapper.selectWithIngredientNames(List.of(14L)))
+                .thenReturn(validIngredients(14L));
+        when(methodMapper.selectByRecipeIdsForUpdate(List.of(14L)))
+                .thenReturn(List.of(method(21L, 15L, "错误做法", "炒")));
 
         assertInvalid(() -> assembler.assemble(70L, List.of(
                 householdSelection(14L, 7L, 8L, 21L))));
@@ -229,7 +320,7 @@ class DinnerRecordSnapshotAssemblerTest {
     @Test
     void systemRecipeWithoutRequiredIngredientIsInvalid() {
         DinnerRecipeEntity system = systemRecipe(1L, null);
-        when(recipeMapper.selectByIds(List.of(1L))).thenReturn(List.of(system));
+        when(recipeMapper.selectByIdsForUpdate(List.of(1L))).thenReturn(List.of(system));
         when(ingredientMapper.selectWithIngredientNames(List.of(1L))).thenReturn(List.of(
                 ingredient(1L, 101L, "盐", false, 0)));
 
@@ -324,7 +415,7 @@ class DinnerRecordSnapshotAssemblerTest {
             DinnerRecipeIngredientRow invalidIngredient
     ) {
         DinnerRecipeEntity system = systemRecipe(1L, null);
-        when(recipeMapper.selectByIds(List.of(1L))).thenReturn(List.of(system));
+        when(recipeMapper.selectByIdsForUpdate(List.of(1L))).thenReturn(List.of(system));
         when(ingredientMapper.selectWithIngredientNames(List.of(1L)))
                 .thenReturn(List.of(invalidIngredient));
 
@@ -342,10 +433,10 @@ class DinnerRecordSnapshotAssemblerTest {
     @Test
     void missingMethodRowIsInvalid() {
         DinnerRecipeEntity family = householdRecipe(14L, 70L, 8L, 2, 91L);
-        when(recipeMapper.selectByIds(List.of(14L))).thenReturn(List.of(family));
+        when(recipeMapper.selectByIdsForUpdate(List.of(14L))).thenReturn(List.of(family));
         when(ingredientMapper.selectWithIngredientNames(List.of(14L)))
                 .thenReturn(validIngredients(14L));
-        when(methodMapper.selectByIds(List.of(21L))).thenReturn(List.of());
+        when(methodMapper.selectByRecipeIdsForUpdate(List.of(14L))).thenReturn(List.of());
 
         assertInvalid(() -> assembler.assemble(70L, List.of(
                 householdSelection(14L, 7L, 8L, 21L))));
@@ -364,13 +455,13 @@ class DinnerRecordSnapshotAssemblerTest {
 
     @Test
     void missingAndDuplicateRecipeRowsAreInvalid() {
-        when(recipeMapper.selectByIds(List.of(1L))).thenReturn(List.of());
+        when(recipeMapper.selectByIdsForUpdate(List.of(1L))).thenReturn(List.of());
         assertInvalid(() -> assembler.assemble(70L, List.of(systemSelection(1L, 7L))));
         verify(ingredientMapper, never()).selectWithIngredientNames(any());
 
         org.mockito.Mockito.reset(recipeMapper);
         DinnerRecipeEntity system = systemRecipe(1L, null);
-        when(recipeMapper.selectByIds(List.of(1L))).thenReturn(List.of(system, system));
+        when(recipeMapper.selectByIdsForUpdate(List.of(1L))).thenReturn(List.of(system, system));
         assertInvalid(() -> assembler.assemble(70L, List.of(systemSelection(1L, 7L))));
     }
 
@@ -378,10 +469,11 @@ class DinnerRecordSnapshotAssemblerTest {
     void duplicateMethodRowsAreInvalid() {
         DinnerRecipeEntity family = householdRecipe(14L, 70L, 8L, 2, 91L);
         DinnerRecipeMethodEntity saved = method(21L, 14L, "家常做法", "炒");
-        when(recipeMapper.selectByIds(List.of(14L))).thenReturn(List.of(family));
+        when(recipeMapper.selectByIdsForUpdate(List.of(14L))).thenReturn(List.of(family));
         when(ingredientMapper.selectWithIngredientNames(List.of(14L)))
                 .thenReturn(validIngredients(14L));
-        when(methodMapper.selectByIds(List.of(21L))).thenReturn(List.of(saved, saved));
+        when(methodMapper.selectByRecipeIdsForUpdate(List.of(14L)))
+                .thenReturn(List.of(saved, saved));
 
         assertInvalid(() -> assembler.assemble(70L, List.of(
                 householdSelection(14L, 7L, 8L, 21L))));
@@ -390,7 +482,7 @@ class DinnerRecordSnapshotAssemblerTest {
     @Test
     void ingredientRowForUnselectedRecipeIsInvalid() {
         DinnerRecipeEntity system = systemRecipe(1L, null);
-        when(recipeMapper.selectByIds(List.of(1L))).thenReturn(List.of(system));
+        when(recipeMapper.selectByIdsForUpdate(List.of(1L))).thenReturn(List.of(system));
         when(ingredientMapper.selectWithIngredientNames(List.of(1L))).thenReturn(List.of(
                 ingredient(1L, 101L, "番茄", true, 0),
                 ingredient(99L, 999L, "越界食材", true, 0)));
@@ -418,11 +510,11 @@ class DinnerRecordSnapshotAssemblerTest {
             List<DinnerRecipeMethodStepEntity> steps,
             Map<Long, ImageAssetResponse> images
     ) {
-        when(recipeMapper.selectByIds(List.of(14L))).thenReturn(List.of(recipe));
+        when(recipeMapper.selectByIdsForUpdate(List.of(14L))).thenReturn(List.of(recipe));
         when(ingredientMapper.selectWithIngredientNames(List.of(14L)))
                 .thenReturn(ingredients);
-        when(methodMapper.selectByIds(List.of(21L))).thenReturn(methods);
-        when(stepMapper.selectList(any())).thenReturn(steps);
+        when(methodMapper.selectByRecipeIdsForUpdate(List.of(14L))).thenReturn(methods);
+        when(stepMapper.selectByMethodIdsForUpdate(List.of(21L))).thenReturn(steps);
         when(imageAssetService.findApprovedByIds(List.of(91L))).thenReturn(images);
     }
 
@@ -557,11 +649,6 @@ class DinnerRecordSnapshotAssemblerTest {
                 "https://example.com/source", "author", "CC BY 4.0",
                 "https://creativecommons.org/licenses/by/4.0/",
                 LocalDate.of(2026, 7, 1), 1200, 900);
-    }
-
-    @SuppressWarnings({"rawtypes", "unchecked"})
-    private static <T> ArgumentCaptor<Wrapper<T>> wrapperCaptor() {
-        return (ArgumentCaptor) ArgumentCaptor.forClass(Wrapper.class);
     }
 
     private void assertInvalid(org.assertj.core.api.ThrowableAssert.ThrowingCallable callable) {

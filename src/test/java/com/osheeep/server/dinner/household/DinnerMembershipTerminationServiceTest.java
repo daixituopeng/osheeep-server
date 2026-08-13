@@ -13,9 +13,14 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.osheeep.server.common.error.BusinessException;
 import com.osheeep.server.common.error.ErrorCode;
+import com.osheeep.server.dinner.cooking.entity.DinnerMenuCookingDishEntity;
+import com.osheeep.server.dinner.cooking.mapper.DinnerMenuCookingDishMapper;
 import com.osheeep.server.dinner.household.DinnerHouseholdDraftLifecycleService.LockedTerminationRecipes;
 import com.osheeep.server.dinner.household.DinnerHouseholdOperationService.HouseholdOperationCommand;
 import com.osheeep.server.dinner.household.entity.DinnerHouseholdEntity;
@@ -54,6 +59,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -97,11 +103,15 @@ class DinnerMembershipTerminationServiceTest {
     @Mock private DinnerHouseholdInventoryMapper inventoryMapper;
     @Mock private DinnerIngredientMapper ingredientMapper;
     @Mock private DinnerRecipePreferenceMapper recipePreferenceMapper;
+    @Mock private DinnerMenuCookingDishMapper cookingDishMapper;
 
     private DinnerMembershipTerminationService service;
 
     @BeforeEach
     void setUp() {
+        TableInfoHelper.initTableInfo(
+                new MapperBuilderAssistant(new MybatisConfiguration(), "test-cooking"),
+                DinnerMenuCookingDishEntity.class);
         service = new DinnerMembershipTerminationService(
                 userMapper,
                 operationMapper,
@@ -116,6 +126,10 @@ class DinnerMembershipTerminationServiceTest {
                 new ObjectMapper(),
                 Clock.fixed(CLOCK_INSTANT, ZoneOffset.UTC));
         service.setRecipePreferenceMapper(recipePreferenceMapper);
+        service.setCookingDishMapper(cookingDishMapper);
+        org.mockito.Mockito.lenient()
+                .when(cookingDishMapper.selectByMenuIdsForUpdate(any()))
+                .thenReturn(List.of());
     }
 
     @Test
@@ -130,7 +144,7 @@ class DinnerMembershipTerminationServiceTest {
                 invite(61L), invite(62L));
         List<DinnerMenuEntity> menus = List.of(
                 menu(21L, "DRAFT", 4L),
-                menu(22L, "CONFIRMED", 9L));
+                menu(22L, "COOKING", 9L));
         List<DinnerMenuSelectionEntity> selections = List.of(
                 selection(71L, 21L, MEMBER_USER_ID, 201L),
                 selection(72L, 21L, OWNER_USER_ID, 202L),
@@ -155,6 +169,12 @@ class DinnerMembershipTerminationServiceTest {
                 .thenReturn(menus);
         when(selectionMapper.selectByMenuIdsForUpdate(List.of(21L, 22L)))
                 .thenReturn(selections);
+        DinnerMenuCookingDishEntity cookingDish = new DinnerMenuCookingDishEntity();
+        cookingDish.setId(74L);
+        cookingDish.setMenuId(22L);
+        when(cookingDishMapper.selectByMenuIdsForUpdate(List.of(21L, 22L)))
+                .thenReturn(List.of(cookingDish));
+        when(cookingDishMapper.delete(any(Wrapper.class))).thenReturn(1);
         when(draftLifecycleService.lockTerminationRecipes(
                 MEMBER_USER_ID, HOUSEHOLD_ID)).thenReturn(recipeLocks);
         when(draftLifecycleService.lockPersonalDraftIngredients(
@@ -207,6 +227,7 @@ class DinnerMembershipTerminationServiceTest {
                 inviteMapper,
                 menuMapper,
                 selectionMapper,
+                cookingDishMapper,
                 draftLifecycleService,
                 recipePreferenceMapper,
                 inventoryMapper,
@@ -220,6 +241,7 @@ class DinnerMembershipTerminationServiceTest {
         order.verify(inviteMapper).selectAllOpenByHouseholdIdForUpdate(HOUSEHOLD_ID);
         order.verify(menuMapper).selectUncompletedByHouseholdIdForUpdate(HOUSEHOLD_ID);
         order.verify(selectionMapper).selectByMenuIdsForUpdate(List.of(21L, 22L));
+        order.verify(cookingDishMapper).selectByMenuIdsForUpdate(List.of(21L, 22L));
         order.verify(draftLifecycleService).lockTerminationRecipes(
                 MEMBER_USER_ID, HOUSEHOLD_ID);
         order.verify(draftLifecycleService).lockPersonalDraftIngredients(
@@ -232,6 +254,7 @@ class DinnerMembershipTerminationServiceTest {
                 61L, HOUSEHOLD_ID, NOW, "MEMBERSHIP_CHANGED");
         order.verify(inviteMapper).revokeOpenInvite(
                 62L, HOUSEHOLD_ID, NOW, "MEMBERSHIP_CHANGED");
+        order.verify(cookingDishMapper).delete(any(Wrapper.class));
         order.verify(selectionMapper).deleteByMenuIdsAndUserId(
                 List.of(21L, 22L), MEMBER_USER_ID);
         order.verify(menuMapper).resetUncompletedMenus(

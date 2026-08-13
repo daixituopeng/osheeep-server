@@ -42,6 +42,12 @@ public enum ErrorCode {
             HttpStatus.BAD_REQUEST, "Dinner menu cooking method resolution is invalid"),
     DINNER_MENU_NOT_CONFIRMED(HttpStatus.CONFLICT, "Dinner menu must be confirmed before completion"),
     DINNER_MENU_COMPLETED(HttpStatus.CONFLICT, "Dinner menu is already completed"),
+    DINNER_MENU_COOKING(HttpStatus.CONFLICT, "Dinner menu is already being cooked"),
+    DINNER_MENU_NOT_COOKING(HttpStatus.CONFLICT, "Dinner cooking has not started"),
+    DINNER_COOKING_DISH_NOT_FOUND(HttpStatus.NOT_FOUND, "Dinner cooking dish was not found"),
+    DINNER_COOKING_DISH_INVALID(HttpStatus.BAD_REQUEST, "Dinner cooking dish is invalid"),
+    DINNER_COOKING_CONFLICT(HttpStatus.CONFLICT, "Dinner cooking state changed"),
+    DINNER_COOKING_EMPTY(HttpStatus.BAD_REQUEST, "Complete at least one dinner dish"),
     DINNER_RECIPE_NOT_FOUND(HttpStatus.NOT_FOUND, "Dinner recipe was not found"),
     DINNER_RECIPE_VERSION_CONFLICT(HttpStatus.CONFLICT, "Dinner recipe was updated elsewhere"),
     DINNER_RECIPE_PREFERENCE_VERSION_CONFLICT(

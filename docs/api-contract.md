@@ -456,6 +456,10 @@ All menu and record endpoints require a bearer token and an `ACTIVE` household m
 | GET    | `/api/dinner/menus/today`            | None                                                     | Today's merged menu              |
 | PUT    | `/api/dinner/menus/today/selections` | `recipeIds` or method-aware `selections`, plus `version` | Updated merged menu              |
 | POST   | `/api/dinner/menus/today/confirm`    | `version`, UUID v4 `idempotencyKey`, `methodResolutions` | Confirmed menu                   |
+| POST   | `/api/dinner/menus/today/cooking/start` | `version`, UUID v4 `idempotencyKey`                   | Frozen cooking session           |
+| GET    | `/api/dinner/menus/today/cooking`       | None                                                     | Current frozen cooking session   |
+| POST   | `/api/dinner/menus/today/cooking/dishes` | `recipeId`, optional `methodId`, `version`, UUID v4 `idempotencyKey` | Updated cooking session |
+| PUT    | `/api/dinner/menus/today/cooking/dishes/{dishId}/completion` | `completed`, `version`              | Updated cooking session          |
 | POST   | `/api/dinner/menus/today/complete`   | `version`, UUID v4 `idempotencyKey`                      | `recordId` and completed menu    |
 | GET    | `/api/dinner/records`                | None                                                     | Completed record summaries       |
 | GET    | `/api/dinner/records/{id}`           | None                                                     | Record detail and dish snapshots |
@@ -515,13 +519,71 @@ If both members selected the same recipe with different methods, confirmation mu
 }
 ```
 
-The chosen method must be one of the methods actually selected for that recipe. Missing resolutions return HTTP 409 `DINNER_MENU_METHOD_RESOLUTION_REQUIRED`; duplicates, extra recipes or unselected methods return HTTP 400 `DINNER_MENU_METHOD_RESOLUTION_INVALID`. The service applies all exact resolutions and confirmation in one transaction. Confirming an empty menu returns `DINNER_MENU_EMPTY`. Updating a completed menu returns `DINNER_MENU_COMPLETED`, and completing a menu that is not confirmed returns `DINNER_MENU_NOT_CONFIRMED`.
+The chosen method must be one of the methods actually selected for that recipe. Missing resolutions return HTTP 409 `DINNER_MENU_METHOD_RESOLUTION_REQUIRED`; duplicates, extra recipes or unselected methods return HTTP 400 `DINNER_MENU_METHOD_RESOLUTION_INVALID`. The service applies all exact resolutions and confirmation in one transaction. Confirming an empty menu returns `DINNER_MENU_EMPTY`. Updating a completed menu returns `DINNER_MENU_COMPLETED`; selection or confirmation writes after cooking starts return `DINNER_MENU_COOKING`.
+
+### Actual cooking session (V15)
+
+Starting cooking is the only transition from `CONFIRMED` to `COOKING`. It freezes every merged planned dish at that moment, including the display summary, selected recipe version, servings, selected method name/style/estimated time and ordered steps, ingredients, selectors, and image path. Later live recipe edits, archive operations, method changes, ingredient changes, or image metadata changes cannot alter this cooking session. The start request is replay-safe by its UUID v4 key and increments the menu version exactly once.
+
+`CookingSessionResponse` is:
+
+```json
+{
+  "menuId": 31,
+  "menuDate": "2026-08-13",
+  "status": "COOKING",
+  "version": 8,
+  "recordId": null,
+  "dishes": [
+    {
+      "id": 101,
+      "recipeId": 14,
+      "name": "番茄炒蛋",
+      "imagePath": "https://www.osheeep.com/media/recipes/family-list.webp",
+      "category": "家常菜",
+      "flavor": "酸甜",
+      "estimatedMinutes": 10,
+      "scope": "HOUSEHOLD",
+      "recipeVersion": 8,
+      "servings": 2,
+      "method": {
+        "id": 21,
+        "name": "家常做法",
+        "cookingStyle": "炒",
+        "estimatedMinutes": 10,
+        "steps": [{"instruction": "翻炒至熟", "sortOrder": 0}]
+      },
+      "ingredients": [
+        {"ingredientId": 101, "name": "鸡蛋", "quantity": 2,
+         "unit": "枚", "required": true, "sortOrder": 0}
+      ],
+      "origin": "PLANNED",
+      "selectedBy": [{"kind": "ME"}, {"kind": "PARTNER"}],
+      "addedBy": null,
+      "completed": false,
+      "completedBy": null,
+      "completedAt": null,
+      "sortOrder": 0
+    }
+  ]
+}
+```
+
+A temporary dish is added with `POST /cooking/dishes`. The server validates a currently published system or current-household recipe, resolves or validates its method, freezes the same complete snapshot, assigns `origin: "TEMPORARY"`, records privacy-safe `addedBy` semantics, and increments the menu version. The UUID v4 add key is idempotent. When the original request omits `methodId`, replaying that same omitted-method request returns the originally frozen default method even though its stored snapshot contains a concrete method ID. Reusing a key for another menu or recipe, or supplying a different explicit method ID, returns `DINNER_COOKING_CONFLICT`. A recipe already present in the cooking session or a session above 20 dishes returns `DINNER_COOKING_DISH_INVALID`.
+
+Dish completion is a desired-state `PUT`. Both checking and unchecking require the exact current menu version, including a retry whose dish already has the requested state. A successful state change records or clears `completedBy`/`completedAt` and increments the version. Stale versions return `DINNER_MENU_VERSION_CONFLICT`; missing dishes return `DINNER_COOKING_DISH_NOT_FOUND`. Mutations after final completion return `DINNER_MENU_COMPLETED`. `GET /cooking` remains readable with `status: "COMPLETED"` after another member ends dinner, includes the immutable record ID in `recordId`, and always returns the stored frozen fields rather than live recipe data. `recordId` is absent/null while the session is still `COOKING`.
+
+Flyway migration `V15__add_menu_cooking_dish_snapshots.sql` creates the menu-owned cooking snapshot table and adds `origin` to immutable record dish snapshots. The cooking table deliberately has a menu foreign key but no live recipe, method, ingredient, membership, or user foreign keys: its JSON/display/actor-ID fields are frozen semantic data, and lifecycle services lock and remove cooking rows before resetting or deleting uncompleted menus. `origin` is exactly `PLANNED` or `TEMPORARY`.
+
+The explicitly selected `DinnerCookingV15MySqlIT` is the guarded MySQL 8 acceptance suite for this migration and transaction boundary. It verifies fresh-to-V15 and production-shaped V13-to-V15 migration, V13 snapshot `origin` backfill, V15 constraints, two ACTIVE members racing add/completion writes at one version, concurrent final completion creating exactly one record with replay after conflict, rollback after a forced real snapshot-insert failure, and legacy `CONFIRMED` completion without cooking rows. It requires raw `OSHEEEP_DB_NAME == OSHEEEP_DB_TEST_NAME`, `OSHEEEP_ALLOW_EPHEMERAL_DATABASES=true`, and a loopback MySQL URL. It then creates only UUID-scoped child catalogs through `DinnerEphemeralCatalogHarness`, closes the Spring pool before cleanup, drops all generated catalogs, and verifies their absence. Never source the development or production `.env.local` for this test. Ordinary `mvn test` does not select `*MySqlIT`; run it explicitly with `mvn test -Dtest=DinnerCookingV15MySqlIT` after supplying a dedicated disposable loopback catalog.
 
 Completion is idempotent by both the request key and the unique menu record. Repeated completion returns the existing record and never creates duplicate snapshots.
 
-Before creating a record, completion revalidates every saved recipe/version/method identity and builds all dish snapshots. A household snapshot freezes the selected recipe scope and version, servings, final selected method ID/name/cooking style and ordered steps, ordered ingredient names/quantities/units/required flags, selected users, and the approved asset's self-hosted list image URL. A system snapshot uses `scope: "SYSTEM"`, `recipeVersion: 1`, `method: null`, and freezes its ordered ingredients. Snapshot JSON is validated and encoded before the record row is inserted; any failure aborts the transaction without a partial record.
+Final completion normally runs from `COOKING` and uses the exact current menu version. It requires at least one completed cooking dish; otherwise it returns `DINNER_COOKING_EMPTY`. Before creating the record, it locks the frozen cooking rows, validates their snapshot shape, and copies only rows whose completion state is true. Unchecked planned dishes are omitted; checked temporary dishes are included with `origin: "TEMPORARY"`. It never re-resolves live recipe data. Any validation or insert failure aborts the transaction without a partial record or completed menu.
 
-`GET /api/dinner/records/{id}` is a read-only historical view. Each dish returns `recipeId`, the frozen display fields, viewer-relative `source`, `scope`, `recipeVersion`, nullable `servings`, nullable `method` with ordered steps, and ordered `ingredients`. It reads the snapshot only and does not re-resolve the live recipe, method, ingredients, or image asset, so later aggregate or approved-asset metadata changes cannot rewrite the record. A pre-V7 row is recognized as legacy only when every V7 snapshot field is empty; it is normalized on read to `scope: "SYSTEM"`, `recipeVersion: 1`, `servings: null`, `method: null`, and `ingredients: []` without mutating the stored row.
+For backward compatibility with already released clients whose completion request body is indistinguishable from the current one, `POST /api/dinner/menus/today/complete` also accepts an exact-version `CONFIRMED` menu. In that state only, the server atomically freezes every planned selection directly into `PLANNED` record snapshots using the legacy all-planned-dishes semantics. It does not create cooking rows, impose the cooking-session dish limit, create a temporary dish, expose an intermediate `COOKING` version, or write a `START_COOKING` action. A menu already in `COOKING` never takes this compatibility path and retains the current actual-dish subset semantics. Existing-record replay remains read-only and does not rebuild snapshots or cooking rows.
+
+`GET /api/dinner/records/{id}` is a read-only historical view. Each dish returns `recipeId`, the frozen display fields, viewer-relative `source`, `scope`, `recipeVersion`, nullable `servings`, nullable `method` with ordered steps, ordered `ingredients`, and `origin`. It reads the snapshot only and does not re-resolve the live recipe, method, ingredients, or image asset, so later aggregate or approved-asset metadata changes cannot rewrite the record. Pre-V15 rows normalize `origin` to `PLANNED`. A pre-V7 row is recognized as legacy only when every V7 snapshot field is empty; it is normalized on read to `scope: "SYSTEM"`, `recipeVersion: 1`, `servings: null`, `method: null`, and `ingredients: []` without mutating the stored row.
 
 ### Record inventory deduction
 
@@ -571,6 +633,7 @@ Example immutable household record dish:
   "source": "BOTH",
   "scope": "HOUSEHOLD",
   "recipeVersion": 8,
+  "origin": "PLANNED",
   "servings": 2,
   "method": {
     "id": 21,
@@ -593,7 +656,7 @@ Example immutable household record dish:
 }
 ```
 
-Invalid recipe identity or state returns HTTP 400 with `DINNER_RECIPE_INVALID` and message `Dinner recipe is invalid`. New selection rejects unknown, non-published, foreign-household, incomplete, or otherwise nonselectable recipes. Rendering a previously saved menu accepts a current-household recipe that is still `PUBLISHED` or was archived after selection; it still rejects a missing recipe, an invalid system identity, a null/non-positive household saved version, inconsistent identities for the same recipe, an invalid saved method association, or missing approved list-image data, and returns the positive saved household `recipeVersion`. Completion performs the stronger immutable-record check: a published household recipe must still equal the saved version, while an archived household recipe must equal the saved version plus the single archive increment. It also rejects tampered method ownership, ingredient visibility, household ownership, or snapshot data. Discovery omits archived and invalid household catalog entries. Completion validates this state before record creation, and its transaction does not retain partial record or menu-completion writes on failure.
+Invalid recipe identity or state returns HTTP 400 with `DINNER_RECIPE_INVALID` and message `Dinner recipe is invalid`. New selection rejects unknown, non-published, foreign-household, incomplete, or otherwise nonselectable recipes. Rendering a previously saved pre-cooking menu accepts a current-household recipe that is still `PUBLISHED` or was archived after selection; it still rejects a missing recipe, an invalid system identity, a null/non-positive household saved version, inconsistent identities for the same recipe, an invalid saved method association, or missing approved list-image data, and returns the positive saved household `recipeVersion`. Starting cooking performs the stronger live-aggregate check before freezing the session: a published household recipe must still equal the saved version, while an archived household recipe must equal the saved version plus the single archive increment. It also rejects tampered method ownership, ingredient visibility, household ownership, or snapshot data. Discovery omits archived and invalid household catalog entries. Final completion does not re-query or revalidate live recipe state or versions; it validates the already frozen cooking snapshots and copies only completed rows. Any snapshot validation or insert failure aborts the transaction without a partial record or completed menu.
 
 ## Dinner Notifications
 

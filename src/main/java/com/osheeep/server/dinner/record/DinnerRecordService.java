@@ -3,6 +3,9 @@ package com.osheeep.server.dinner.record;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.osheeep.server.common.error.BusinessException;
 import com.osheeep.server.common.error.ErrorCode;
+import com.osheeep.server.dinner.cooking.DinnerCookingSnapshotCodec;
+import com.osheeep.server.dinner.cooking.entity.DinnerMenuCookingDishEntity;
+import com.osheeep.server.dinner.cooking.mapper.DinnerMenuCookingDishMapper;
 import com.osheeep.server.dinner.household.DinnerHouseholdAccessService;
 import com.osheeep.server.dinner.household.DinnerHouseholdActorLabelService;
 import com.osheeep.server.dinner.household.DinnerHouseholdAccessService.ActiveHouseholdAccess;
@@ -68,6 +71,8 @@ public class DinnerRecordService {
     private final DinnerHouseholdActorLabelService actorLabelService;
     private final BusinessDateResolver businessDateResolver;
     private final Clock clock;
+    private DinnerMenuCookingDishMapper cookingDishMapper;
+    private DinnerCookingSnapshotCodec cookingSnapshotCodec;
     private DinnerNotificationPublisher notificationPublisher =
             DinnerNotificationPublisher.noop();
 
@@ -124,6 +129,15 @@ public class DinnerRecordService {
         this.notificationPublisher = Objects.requireNonNull(notificationPublisher);
     }
 
+    @Autowired
+    void setCookingSnapshotSupport(
+            DinnerMenuCookingDishMapper cookingDishMapper,
+            DinnerCookingSnapshotCodec cookingSnapshotCodec
+    ) {
+        this.cookingDishMapper = Objects.requireNonNull(cookingDishMapper);
+        this.cookingSnapshotCodec = Objects.requireNonNull(cookingSnapshotCodec);
+    }
+
     @Transactional
     public CompleteMenuResponse complete(Long userId, long expectedVersion, String idempotencyKey) {
         LockedHouseholdContext lockedContext =
@@ -148,18 +162,15 @@ public class DinnerRecordService {
         if (!Objects.equals(menu.getVersion(), expectedVersion)) {
             throw new BusinessException(ErrorCode.DINNER_MENU_VERSION_CONFLICT);
         }
-        if (!"CONFIRMED".equals(menu.getStatus())) {
-            throw new BusinessException(ErrorCode.DINNER_MENU_NOT_CONFIRMED);
+        List<EncodedSnapshotDraft> encodedSnapshotDrafts;
+        if ("CONFIRMED".equals(menu.getStatus())) {
+            encodedSnapshotDrafts = legacyConfirmedSnapshots(
+                    access.householdId(), menu.getId());
+        } else if ("COOKING".equals(menu.getStatus())) {
+            encodedSnapshotDrafts = completedCookingSnapshots(menu.getId());
+        } else {
+            throw new BusinessException(ErrorCode.DINNER_MENU_NOT_COOKING);
         }
-
-        List<DinnerMenuSelectionEntity> selections = selectionMapper.selectList(
-                Wrappers.<DinnerMenuSelectionEntity>lambdaQuery()
-                        .eq(DinnerMenuSelectionEntity::getMenuId, menu.getId()));
-        List<DinnerRecordSnapshotAssembler.SnapshotDraft> snapshotDrafts =
-                snapshotAssembler.assemble(access.householdId(), selections);
-        List<EncodedSnapshotDraft> encodedSnapshotDrafts = snapshotDrafts.stream()
-                .map(this::encodeSnapshotDraft)
-                .toList();
 
         LocalDateTime now = LocalDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         DinnerCookingRecordEntity record = new DinnerCookingRecordEntity();
@@ -191,6 +202,7 @@ public class DinnerRecordService {
             snapshot.setRecipeId(draft.recipeId());
             snapshot.setRecipeScope(draft.scope());
             snapshot.setRecipeVersion(draft.recipeVersion());
+            snapshot.setOrigin(encoded.origin());
             snapshot.setName(draft.name());
             snapshot.setImagePath(draft.imagePath());
             snapshot.setCategory(draft.category());
@@ -320,13 +332,63 @@ public class DinnerRecordService {
     }
 
     private EncodedSnapshotDraft encodeSnapshotDraft(
-            DinnerRecordSnapshotAssembler.SnapshotDraft draft
+            DinnerRecordSnapshotAssembler.SnapshotDraft draft,
+            String origin
     ) {
         return new EncodedSnapshotDraft(
                 draft,
                 snapshotJsonCodec.writeSteps(draft.steps()),
                 snapshotJsonCodec.writeIngredients(draft.ingredients()),
-                toJsonArray(draft.selectedByUserIds()));
+                toJsonArray(draft.selectedByUserIds()),
+                origin);
+    }
+
+    private List<EncodedSnapshotDraft> legacyConfirmedSnapshots(
+            Long householdId,
+            Long menuId
+    ) {
+        List<DinnerMenuSelectionEntity> selections = selectionMapper.selectList(
+                Wrappers.<DinnerMenuSelectionEntity>lambdaQuery()
+                        .eq(DinnerMenuSelectionEntity::getMenuId, menuId));
+        return snapshotAssembler.assemble(householdId, selections).stream()
+                .map(draft -> encodeSnapshotDraft(draft, "PLANNED"))
+                .toList();
+    }
+
+    private List<EncodedSnapshotDraft> completedCookingSnapshots(Long menuId) {
+        if (cookingDishMapper == null || cookingSnapshotCodec == null) {
+            throw new IllegalStateException("Dinner cooking snapshot support is unavailable");
+        }
+        List<DinnerMenuCookingDishEntity> rows =
+                cookingDishMapper.selectByMenuIdForUpdate(menuId);
+        if (rows == null || rows.isEmpty()) {
+            throw new IllegalStateException("Invalid dinner cooking state");
+        }
+        for (DinnerMenuCookingDishEntity row : rows) {
+            if (row == null
+                    || row.getId() == null
+                    || !Objects.equals(row.getMenuId(), menuId)
+                    || (row.getCompletedBy() == null) != (row.getCompletedAt() == null)) {
+                throw new IllegalStateException("Invalid dinner cooking state");
+            }
+        }
+        List<EncodedSnapshotDraft> completed = rows.stream()
+                .filter(row -> row.getCompletedBy() != null)
+                .map(row -> encodeSnapshotDraft(
+                        cookingSnapshotCodec.decode(row), cookingOrigin(row)))
+                .toList();
+        if (completed.isEmpty()) {
+            throw new BusinessException(ErrorCode.DINNER_COOKING_EMPTY);
+        }
+        return completed;
+    }
+
+    private String cookingOrigin(DinnerMenuCookingDishEntity row) {
+        if (!("PLANNED".equals(row.getOrigin())
+                || "TEMPORARY".equals(row.getOrigin()))) {
+            throw new IllegalStateException("Invalid dinner cooking state");
+        }
+        return row.getOrigin();
     }
 
     private Set<Long> selectedUserIds(String selectedByUserIds) {
@@ -409,7 +471,16 @@ public class DinnerRecordService {
         return new RecordDishResponse(
                 snapshot.getRecipeId(), snapshot.getName(), snapshot.getImagePath(),
                 snapshot.getCategory(), snapshot.getFlavor(), snapshot.getEstimatedMinutes(),
-                source(selectedBy), selectedBy, scope, recipeVersion, servings, method, ingredients);
+                source(selectedBy), selectedBy, scope, recipeVersion, servings, method,
+                ingredients, snapshotOrigin(snapshot));
+    }
+
+    private String snapshotOrigin(DinnerRecordDishSnapshotEntity snapshot) {
+        String origin = snapshot.getOrigin() == null ? "PLANNED" : snapshot.getOrigin();
+        if (!("PLANNED".equals(origin) || "TEMPORARY".equals(origin))) {
+            throw incompleteSnapshot();
+        }
+        return origin;
     }
 
     private boolean isLegacySnapshot(DinnerRecordDishSnapshotEntity snapshot) {
@@ -494,7 +565,8 @@ public class DinnerRecordService {
             DinnerRecordSnapshotAssembler.SnapshotDraft draft,
             String methodStepsJson,
             String ingredientsJson,
-            String selectedByUserIdsJson
+            String selectedByUserIdsJson,
+            String origin
     ) {
     }
 }

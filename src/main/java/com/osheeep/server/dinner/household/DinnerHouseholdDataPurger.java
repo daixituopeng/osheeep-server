@@ -1,6 +1,8 @@
 package com.osheeep.server.dinner.household;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.osheeep.server.dinner.cooking.entity.DinnerMenuCookingDishEntity;
+import com.osheeep.server.dinner.cooking.mapper.DinnerMenuCookingDishMapper;
 import com.osheeep.server.dinner.household.entity.DinnerHouseholdMemberEntity;
 import com.osheeep.server.dinner.household.mapper.DinnerHouseholdMapper;
 import com.osheeep.server.dinner.household.mapper.DinnerHouseholdMemberMapper;
@@ -69,6 +71,7 @@ public class DinnerHouseholdDataPurger {
     private DinnerNotificationMapper notificationMapper;
     private DinnerSubscriptionDeliveryMapper subscriptionDeliveryMapper;
     private DinnerRecipePreferenceMapper recipePreferenceMapper;
+    private DinnerMenuCookingDishMapper cookingDishMapper;
 
     public DinnerHouseholdDataPurger(
             DinnerHouseholdMapper householdMapper,
@@ -122,6 +125,11 @@ public class DinnerHouseholdDataPurger {
         this.recipePreferenceMapper = Objects.requireNonNull(recipePreferenceMapper);
     }
 
+    @Autowired
+    void setCookingDishMapper(DinnerMenuCookingDishMapper cookingDishMapper) {
+        this.cookingDishMapper = Objects.requireNonNull(cookingDishMapper);
+    }
+
     @Transactional(propagation = Propagation.MANDATORY)
     public void purgeHousehold(
             Long householdId,
@@ -143,6 +151,10 @@ public class DinnerHouseholdDataPurger {
         List<DinnerMenuSelectionEntity> selections = menuIds.isEmpty()
                 ? List.of()
                 : requireList(selectionMapper.selectByMenuIdsForUpdate(menuIds));
+        List<DinnerMenuCookingDishEntity> cookingDishes =
+                menuIds.isEmpty() || cookingDishMapper == null
+                        ? List.of()
+                        : requireList(cookingDishMapper.selectByMenuIdsForUpdate(menuIds));
         List<DinnerMenuActionEntity> actions = menuIds.isEmpty()
                 ? List.of()
                 : requireList(actionMapper.selectByMenuIdsForUpdate(menuIds));
@@ -185,7 +197,8 @@ public class DinnerHouseholdDataPurger {
 
         // Keep references live so mocks and reviewers can verify that every selected row was
         // locked before the first delete. Structural validation below also rejects corrupt sets.
-        validateAggregateRows(householdId, menus, selections, actions, records, snapshots,
+        validateAggregateRows(householdId, menus, selections, cookingDishes, actions,
+                records, snapshots,
                 recipes, lineageReferences, methods, steps, recipeIngredients, inventory,
                 householdIngredients, operations, invites);
         validateRecipePreferences(householdId, recipePreferences);
@@ -372,6 +385,10 @@ public class DinnerHouseholdDataPurger {
         recordMapper.delete(Wrappers.<DinnerCookingRecordEntity>lambdaQuery()
                 .eq(DinnerCookingRecordEntity::getHouseholdId, householdId));
         if (!menuIds.isEmpty()) {
+            if (cookingDishMapper != null) {
+                cookingDishMapper.delete(Wrappers.<DinnerMenuCookingDishEntity>lambdaQuery()
+                        .in(DinnerMenuCookingDishEntity::getMenuId, menuIds));
+            }
             actionMapper.delete(Wrappers.<DinnerMenuActionEntity>lambdaQuery()
                     .in(DinnerMenuActionEntity::getMenuId, menuIds));
             selectionMapper.delete(Wrappers.<DinnerMenuSelectionEntity>lambdaQuery()
@@ -472,6 +489,7 @@ public class DinnerHouseholdDataPurger {
             Long householdId,
             List<DinnerMenuEntity> menus,
             List<DinnerMenuSelectionEntity> selections,
+            List<DinnerMenuCookingDishEntity> cookingDishes,
             List<DinnerMenuActionEntity> actions,
             List<DinnerCookingRecordEntity> records,
             List<DinnerRecordDishSnapshotEntity> snapshots,
@@ -496,6 +514,10 @@ public class DinnerHouseholdDataPurger {
                 || ingredients.stream().anyMatch(row -> row == null
                 || !Objects.equals(householdId, row.getHouseholdId()))
                 || selections.stream().anyMatch(Objects::isNull)
+                || cookingDishes.stream().anyMatch(row -> row == null
+                        || row.getMenuId() == null
+                        || menus.stream().noneMatch(menu ->
+                                Objects.equals(menu.getId(), row.getMenuId())))
                 || actions.stream().anyMatch(Objects::isNull)
                 || snapshots.stream().anyMatch(Objects::isNull)
                 || lineageReferences.stream().anyMatch(Objects::isNull)

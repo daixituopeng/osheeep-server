@@ -18,6 +18,9 @@ import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.osheeep.server.common.error.BusinessException;
 import com.osheeep.server.common.error.ErrorCode;
+import com.osheeep.server.dinner.cooking.DinnerCookingSnapshotCodec;
+import com.osheeep.server.dinner.cooking.entity.DinnerMenuCookingDishEntity;
+import com.osheeep.server.dinner.cooking.mapper.DinnerMenuCookingDishMapper;
 import com.osheeep.server.dinner.household.DinnerHouseholdAccessService;
 import com.osheeep.server.dinner.household.DinnerHouseholdActorLabelService;
 import com.osheeep.server.dinner.household.DinnerHouseholdAccessService.ActiveHouseholdAccess;
@@ -78,14 +81,19 @@ class DinnerRecordServiceTest {
     @Mock private DinnerMenuService menuService;
     @Mock private DinnerRecordSnapshotAssembler snapshotAssembler;
     @Mock private DinnerHouseholdActorLabelService actorLabelService;
+    @Mock private DinnerMenuCookingDishMapper cookingDishMapper;
 
     private DinnerRecordService service;
+    private DinnerCookingSnapshotCodec cookingSnapshotCodec;
 
     @BeforeEach
     void setUp() {
         TableInfoHelper.initTableInfo(
                 new MapperBuilderAssistant(new MybatisConfiguration(), "test"),
                 DinnerCookingRecordEntity.class);
+        TableInfoHelper.initTableInfo(
+                new MapperBuilderAssistant(new MybatisConfiguration(), "test-cooking"),
+                DinnerMenuCookingDishEntity.class);
         Clock clock = Clock.fixed(Instant.parse("2026-07-11T11:00:00Z"), ZoneOffset.UTC);
         lenient().when(actorLabelService.resolve(any(), any(), any()))
                 .thenAnswer(invocation -> defaultActors(
@@ -93,12 +101,21 @@ class DinnerRecordServiceTest {
         lenient().when(actorLabelService.ordered(any(), any()))
                 .thenAnswer(invocation -> orderedActors(
                         invocation.getArgument(0), invocation.getArgument(1)));
+        ObjectMapper objectMapper = new ObjectMapper();
+        DinnerRecordSnapshotJsonCodec recordSnapshotCodec =
+                new DinnerRecordSnapshotJsonCodec(objectMapper);
+        cookingSnapshotCodec = new DinnerCookingSnapshotCodec(
+                recordSnapshotCodec, objectMapper);
         service = new DinnerRecordService(
                 householdAccessService, menuMapper, selectionMapper, actionMapper,
                 recordMapper, snapshotMapper, menuService, snapshotAssembler,
-                new DinnerRecordSnapshotJsonCodec(new ObjectMapper()),
+                recordSnapshotCodec,
                 actorLabelService,
                 new BusinessDateResolver(), clock);
+        service.setCookingSnapshotSupport(cookingDishMapper, cookingSnapshotCodec);
+        lenient().when(cookingDishMapper.selectByMenuIdForUpdate(31L))
+                .thenReturn(List.of(completedCookingRow(
+                        101L, systemDraft(1L, Set.of(7L)), "PLANNED", 0)));
     }
 
     @Test
@@ -115,6 +132,8 @@ class DinnerRecordServiceTest {
         verify(recordMapper, never()).insert(any(DinnerCookingRecordEntity.class));
         verify(snapshotMapper, never()).insert(any(DinnerRecordDishSnapshotEntity.class));
         verifyNoInteractions(snapshotAssembler);
+        verify(cookingDishMapper, never()).selectByMenuIdForUpdate(any());
+        verify(cookingDishMapper, never()).insert(any(DinnerMenuCookingDishEntity.class));
         InOrder order = inOrder(householdAccessService, menuMapper, recordMapper);
         order.verify(householdAccessService).lockActiveHouseholdContext(7L);
         order.verify(menuMapper).selectByHouseholdAndDateForUpdate(
@@ -196,11 +215,9 @@ class DinnerRecordServiceTest {
 
     @Test
     void completeRejectsANewRecordBeforeAFutureMembershipVisibilityWindow() {
-        DinnerMenuEntity menu = menu("CONFIRMED", 5L);
+        DinnerMenuEntity menu = menu("COOKING", 5L);
         stubContext(menu, access(LocalDateTime.of(2026, 7, 11, 12, 0)));
         when(recordMapper.selectOne(any())).thenReturn(null);
-        when(selectionMapper.selectList(any())).thenReturn(List.of());
-        when(snapshotAssembler.assemble(11L, List.of())).thenReturn(List.of());
 
         assertThatThrownBy(() -> service.complete(
                 7L, 5L, "00000000-0000-4000-8000-000000000094"))
@@ -211,6 +228,132 @@ class DinnerRecordServiceTest {
         verify(menuMapper, never()).updateById(any(DinnerMenuEntity.class));
         verify(actionMapper, never()).insert(any(DinnerMenuActionEntity.class));
         verifyNoInteractions(snapshotMapper, menuService);
+    }
+
+    @Test
+    void legacyConfirmedCompleteDirectlyFreezesEveryPlannedDishAndCreatesPendingRecord() {
+        DinnerMenuEntity menu = menu("CONFIRMED", 5L);
+        LockedHouseholdContext context = stubContext(menu);
+        when(recordMapper.selectOne(any())).thenReturn(null);
+        List<DinnerMenuSelectionEntity> selections = List.of(
+                selection(7L, 1L), selection(8L, 14L));
+        when(selectionMapper.selectList(any())).thenReturn(selections);
+        List<DinnerRecordSnapshotAssembler.SnapshotDraft> drafts = List.of(
+                systemDraft(1L, Set.of(7L)),
+                householdDraft(14L, Set.of(8L)));
+        when(snapshotAssembler.assemble(11L, selections)).thenReturn(drafts);
+        when(recordMapper.insert(any(DinnerCookingRecordEntity.class)))
+                .thenAnswer(invocation -> {
+                    invocation.<DinnerCookingRecordEntity>getArgument(0).setId(91L);
+                    return 1;
+                });
+        when(menuService.responseForLockedContext(7L, context, menu))
+                .thenReturn(today(91L));
+
+        var result = service.complete(
+                7L, 5L, "00000000-0000-4000-8000-000000000121");
+
+        assertThat(result.recordId()).isEqualTo(91L);
+        assertThat(menu.getStatus()).isEqualTo("COMPLETED");
+        assertThat(menu.getVersion()).isEqualTo(6L);
+        ArgumentCaptor<DinnerCookingRecordEntity> insertedRecord =
+                ArgumentCaptor.forClass(DinnerCookingRecordEntity.class);
+        verify(recordMapper).insert(insertedRecord.capture());
+        assertThat(insertedRecord.getValue().getInventoryDeductionStatus())
+                .isEqualTo("PENDING");
+        ArgumentCaptor<DinnerRecordDishSnapshotEntity> recordDishes =
+                ArgumentCaptor.forClass(DinnerRecordDishSnapshotEntity.class);
+        verify(snapshotMapper, times(2)).insert(recordDishes.capture());
+        assertThat(recordDishes.getAllValues())
+                .extracting(DinnerRecordDishSnapshotEntity::getOrigin)
+                .containsExactly("PLANNED", "PLANNED");
+        verify(cookingDishMapper, never()).selectByMenuIdForUpdate(any());
+        verify(cookingDishMapper, never()).insert(any(DinnerMenuCookingDishEntity.class));
+        verify(actionMapper).insert(any(DinnerMenuActionEntity.class));
+    }
+
+    @Test
+    void legacyConfirmedCompleteSupportsMoreThanTheCookingSessionDishLimit() {
+        DinnerMenuEntity menu = menu("CONFIRMED", 5L);
+        LockedHouseholdContext context = stubContext(menu);
+        when(recordMapper.selectOne(any())).thenReturn(null);
+        List<DinnerMenuSelectionEntity> selections = IntStream.rangeClosed(1, 21)
+                .mapToObj(recipeId -> selection(7L, (long) recipeId))
+                .toList();
+        List<DinnerRecordSnapshotAssembler.SnapshotDraft> drafts =
+                IntStream.rangeClosed(1, 21)
+                        .mapToObj(recipeId -> systemDraft((long) recipeId, Set.of(7L)))
+                        .toList();
+        when(selectionMapper.selectList(any())).thenReturn(selections);
+        when(snapshotAssembler.assemble(11L, selections)).thenReturn(drafts);
+        when(recordMapper.insert(any(DinnerCookingRecordEntity.class)))
+                .thenAnswer(invocation -> {
+                    invocation.<DinnerCookingRecordEntity>getArgument(0).setId(91L);
+                    return 1;
+                });
+        when(menuService.responseForLockedContext(7L, context, menu))
+                .thenReturn(today(91L));
+
+        var result = service.complete(
+                7L, 5L, "00000000-0000-4000-8000-000000000124");
+
+        assertThat(result.recordId()).isEqualTo(91L);
+        verify(snapshotMapper, times(21))
+                .insert(any(DinnerRecordDishSnapshotEntity.class));
+        verify(cookingDishMapper, never()).selectByMenuIdForUpdate(any());
+        verify(cookingDishMapper, never()).insert(any(DinnerMenuCookingDishEntity.class));
+    }
+
+    @Test
+    void legacyConfirmedSnapshotFailureDoesNotReachMenuOrActionWrites() {
+        DinnerMenuEntity menu = menu("CONFIRMED", 5L);
+        stubContext(menu);
+        when(recordMapper.selectOne(any())).thenReturn(null);
+        List<DinnerMenuSelectionEntity> selections = List.of(selection(7L, 1L));
+        when(selectionMapper.selectList(any())).thenReturn(selections);
+        when(snapshotAssembler.assemble(11L, selections))
+                .thenReturn(List.of(systemDraft(1L, Set.of(7L))));
+        when(recordMapper.insert(any(DinnerCookingRecordEntity.class)))
+                .thenAnswer(invocation -> {
+                    invocation.<DinnerCookingRecordEntity>getArgument(0).setId(91L);
+                    return 1;
+                });
+        when(snapshotMapper.insert(any(DinnerRecordDishSnapshotEntity.class)))
+                .thenThrow(new IllegalStateException("snapshot write failed"));
+
+        assertThatThrownBy(() -> service.complete(
+                7L, 5L, "00000000-0000-4000-8000-000000000123"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("snapshot write failed");
+
+        verify(cookingDishMapper, never()).selectByMenuIdForUpdate(any());
+        verify(cookingDishMapper, never()).insert(any(DinnerMenuCookingDishEntity.class));
+        verify(recordMapper).insert(any(DinnerCookingRecordEntity.class));
+        verify(menuMapper, never()).updateById(any(DinnerMenuEntity.class));
+        verify(actionMapper, never()).insert(any(DinnerMenuActionEntity.class));
+    }
+
+    @Test
+    void completeRejectsACookingSessionWithNoCompletedDishesBeforeWrites() {
+        DinnerMenuEntity menu = menu("COOKING", 5L);
+        stubContext(menu);
+        when(recordMapper.selectOne(any())).thenReturn(null);
+        DinnerMenuCookingDishEntity uncompleted = cookingSnapshotCodec.encode(
+                31L, systemDraft(1L, Set.of(7L)), "PLANNED", null, null, 0);
+        uncompleted.setId(101L);
+        when(cookingDishMapper.selectByMenuIdForUpdate(31L))
+                .thenReturn(List.of(uncompleted));
+
+        assertThatThrownBy(() -> service.complete(
+                7L, 5L, "00000000-0000-4000-8000-000000000122"))
+                .isInstanceOfSatisfying(BusinessException.class, error ->
+                        assertThat(error.errorCode())
+                                .isEqualTo(ErrorCode.DINNER_COOKING_EMPTY));
+
+        verify(recordMapper, never()).insert(any(DinnerCookingRecordEntity.class));
+        verify(snapshotMapper, never()).insert(any(DinnerRecordDishSnapshotEntity.class));
+        verify(menuMapper, never()).updateById(any(DinnerMenuEntity.class));
+        verify(actionMapper, never()).insert(any(DinnerMenuActionEntity.class));
     }
 
     @Test
@@ -236,15 +379,18 @@ class DinnerRecordServiceTest {
 
     @Test
     void completeCreatesOneRecordAndDishSnapshots() {
-        DinnerMenuEntity menu = menu("CONFIRMED", 5L);
+        DinnerMenuEntity menu = menu("COOKING", 5L);
         LockedHouseholdContext context = stubContext(menu);
         when(recordMapper.selectOne(any())).thenReturn(null);
-        List<DinnerMenuSelectionEntity> selections = List.of(
-                selection(7L, 1L), selection(8L, 1L), selection(7L, 14L));
-        when(selectionMapper.selectList(any())).thenReturn(selections);
-        when(snapshotAssembler.assemble(11L, selections)).thenReturn(List.of(
-                systemDraft(1L, Set.of(7L, 8L)),
-                householdDraft(14L, Set.of(7L))));
+        DinnerMenuCookingDishEntity skipped = cookingSnapshotCodec.encode(
+                31L, householdDraft(15L, Set.of(8L)), "PLANNED", null, null, 2);
+        skipped.setId(103L);
+        when(cookingDishMapper.selectByMenuIdForUpdate(31L)).thenReturn(List.of(
+                completedCookingRow(
+                        101L, systemDraft(1L, Set.of(7L, 8L)), "PLANNED", 0),
+                completedCookingRow(
+                        102L, householdDraft(14L, Set.of(7L)), "TEMPORARY", 1),
+                skipped));
         when(recordMapper.insert(any(DinnerCookingRecordEntity.class))).thenAnswer(invocation -> {
             invocation.<DinnerCookingRecordEntity>getArgument(0).setId(91L);
             return 1;
@@ -269,6 +415,7 @@ class DinnerRecordServiceTest {
                 system -> {
                     assertThat(system.getRecipeScope()).isEqualTo("SYSTEM");
                     assertThat(system.getRecipeVersion()).isEqualTo(1L);
+                    assertThat(system.getOrigin()).isEqualTo("PLANNED");
                     assertThat(system.getServings()).isNull();
                     assertThat(system.getMethodId()).isNull();
                     assertThat(system.getIngredientsJson()).contains("系统食材");
@@ -277,6 +424,7 @@ class DinnerRecordServiceTest {
                 family -> {
                     assertThat(family.getRecipeScope()).isEqualTo("HOUSEHOLD");
                     assertThat(family.getRecipeVersion()).isEqualTo(8L);
+                    assertThat(family.getOrigin()).isEqualTo("TEMPORARY");
                     assertThat(family.getServings()).isEqualTo(2);
                     assertThat(family.getMethodId()).isEqualTo(21L);
                     assertThat(family.getMethodStepsJson()).contains("翻炒", "盛盘");
@@ -290,14 +438,12 @@ class DinnerRecordServiceTest {
 
     @Test
     void duplicateCompletionUsesLockedContextResponseWithoutReadAuthorization() {
-        DinnerMenuEntity menu = menu("CONFIRMED", 5L);
+        DinnerMenuEntity menu = menu("COOKING", 5L);
         LockedHouseholdContext context = stubContext(menu);
         DinnerCookingRecordEntity winner = record(92L, 31L);
         when(recordMapper.selectOne(any()))
                 .thenReturn(null)
                 .thenReturn(winner);
-        when(selectionMapper.selectList(any())).thenReturn(List.of());
-        when(snapshotAssembler.assemble(11L, List.of())).thenReturn(List.of());
         when(recordMapper.insert(any(DinnerCookingRecordEntity.class)))
                 .thenThrow(new DuplicateKeyException("duplicate"));
         when(menuService.responseForLockedContext(7L, context, menu))
@@ -316,19 +462,19 @@ class DinnerRecordServiceTest {
 
     @Test
     void aggregateValidationFailureHappensBeforeAnyCompletionWrite() {
-        DinnerMenuEntity menu = menu("CONFIRMED", 5L);
+        DinnerMenuEntity menu = menu("COOKING", 5L);
         stubContext(menu);
         when(recordMapper.selectOne(any())).thenReturn(null);
-        List<DinnerMenuSelectionEntity> selections = List.of(selection(7L, 14L));
-        when(selectionMapper.selectList(any())).thenReturn(selections);
-        when(snapshotAssembler.assemble(11L, selections))
-                .thenThrow(new BusinessException(ErrorCode.DINNER_RECIPE_INVALID));
+        DinnerMenuCookingDishEntity invalid = completedCookingRow(
+                101L, householdDraft(14L, Set.of(7L)), "PLANNED", 0);
+        invalid.setOrigin("BROKEN");
+        when(cookingDishMapper.selectByMenuIdForUpdate(31L))
+                .thenReturn(List.of(invalid));
 
         assertThatThrownBy(() -> service.complete(
                 7L, 5L, "00000000-0000-4000-8000-000000000013"))
-                .isInstanceOfSatisfying(BusinessException.class, error ->
-                        assertThat(error.errorCode())
-                                .isEqualTo(ErrorCode.DINNER_RECIPE_INVALID));
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Invalid dinner cooking state");
 
         verify(recordMapper, never()).insert(any(DinnerCookingRecordEntity.class));
         verify(snapshotMapper, never()).insert(any(DinnerRecordDishSnapshotEntity.class));
@@ -338,15 +484,17 @@ class DinnerRecordServiceTest {
 
     @Test
     void everySnapshotDraftIsEncodedBeforeAnyCompletionWrite() {
-        DinnerMenuEntity menu = menu("CONFIRMED", 5L);
+        DinnerMenuEntity menu = menu("COOKING", 5L);
         stubContext(menu);
         when(recordMapper.selectOne(any())).thenReturn(null);
-        List<DinnerMenuSelectionEntity> selections = List.of(
-                selection(7L, 1L), selection(7L, 14L));
-        when(selectionMapper.selectList(any())).thenReturn(selections);
-        when(snapshotAssembler.assemble(11L, selections)).thenReturn(List.of(
-                systemDraft(1L, Set.of(7L)),
-                householdDraftWithInvalidStep(14L, Set.of(7L))));
+        DinnerMenuCookingDishEntity invalid = completedCookingRow(
+                102L, householdDraft(14L, Set.of(7L)), "PLANNED", 1);
+        invalid.setMethodStepsJson(
+                "[{\"instruction\":\"翻炒\",\"sortOrder\":-1}]");
+        when(cookingDishMapper.selectByMenuIdForUpdate(31L)).thenReturn(List.of(
+                completedCookingRow(
+                        101L, systemDraft(1L, Set.of(7L)), "PLANNED", 0),
+                invalid));
 
         assertThatThrownBy(() -> service.complete(
                 7L, 5L, "00000000-0000-4000-8000-000000000016"))
@@ -361,14 +509,14 @@ class DinnerRecordServiceTest {
 
     @Test
     void snapshotInsertFailureEscapesBeforeMenuAndActionWrites() {
-        DinnerMenuEntity menu = menu("CONFIRMED", 5L);
+        DinnerMenuEntity menu = menu("COOKING", 5L);
         stubContext(menu);
         when(recordMapper.selectOne(any())).thenReturn(null);
-        List<DinnerMenuSelectionEntity> selections = List.of(
-                selection(7L, 1L), selection(7L, 14L));
-        when(selectionMapper.selectList(any())).thenReturn(selections);
-        when(snapshotAssembler.assemble(11L, selections)).thenReturn(List.of(
-                systemDraft(1L, Set.of(7L)), householdDraft(14L, Set.of(7L))));
+        when(cookingDishMapper.selectByMenuIdForUpdate(31L)).thenReturn(List.of(
+                completedCookingRow(
+                        101L, systemDraft(1L, Set.of(7L)), "PLANNED", 0),
+                completedCookingRow(
+                        102L, householdDraft(14L, Set.of(7L)), "TEMPORARY", 1)));
         when(recordMapper.insert(any(DinnerCookingRecordEntity.class))).thenAnswer(invocation -> {
             invocation.<DinnerCookingRecordEntity>getArgument(0).setId(91L);
             return 1;
@@ -389,15 +537,11 @@ class DinnerRecordServiceTest {
 
     @Test
     void duplicateRecordWithoutWinnerRethrowsDuplicateFailure() {
-        DinnerMenuEntity menu = menu("CONFIRMED", 5L);
+        DinnerMenuEntity menu = menu("COOKING", 5L);
         stubContext(menu);
         when(recordMapper.selectOne(any()))
                 .thenReturn(null)
                 .thenReturn(null);
-        List<DinnerMenuSelectionEntity> selections = List.of(selection(7L, 1L));
-        when(selectionMapper.selectList(any())).thenReturn(selections);
-        when(snapshotAssembler.assemble(11L, selections)).thenReturn(List.of(
-                systemDraft(1L, Set.of(7L))));
         when(recordMapper.insert(any(DinnerCookingRecordEntity.class)))
                 .thenThrow(new DuplicateKeyException("duplicate"));
 
@@ -663,6 +807,7 @@ class DinnerRecordServiceTest {
         var dish = service.detail(7L, 91L).dishes().getFirst();
 
         assertThat(dish.scope()).isEqualTo("HOUSEHOLD");
+        assertThat(dish.origin()).isEqualTo("PLANNED");
         assertThat(dish.recipeVersion()).isEqualTo(8L);
         assertThat(dish.method().id()).isEqualTo(21L);
         assertThat(dish.method().steps()).extracting(step -> step.sortOrder())
@@ -926,6 +1071,25 @@ class DinnerRecordServiceTest {
                 List.of(new RecordMethodStepSnapshotResponse("翻炒", -1)),
                 List.of(new RecordIngredientSnapshotResponse(
                         201L, "鸡蛋", BigDecimal.ONE, "枚", true, 0)));
+    }
+
+    private DinnerMenuCookingDishEntity completedCookingRow(
+            Long id,
+            DinnerRecordSnapshotAssembler.SnapshotDraft draft,
+            String origin,
+            int sortOrder
+    ) {
+        DinnerMenuCookingDishEntity row = cookingSnapshotCodec.encode(
+                31L, draft, origin,
+                "TEMPORARY".equals(origin) ? 7L : null,
+                "TEMPORARY".equals(origin)
+                        ? "00000000-0000-4000-8000-000000000120"
+                        : null,
+                sortOrder);
+        row.setId(id);
+        row.setCompletedBy(7L);
+        row.setCompletedAt(LocalDateTime.of(2026, 7, 11, 10, 59));
+        return row;
     }
 
     private DinnerRecordDishSnapshotEntity snapshot() {

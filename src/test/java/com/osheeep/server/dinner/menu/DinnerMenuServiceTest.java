@@ -45,6 +45,8 @@ import com.osheeep.server.dinner.recipe.entity.DinnerRecipeEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeMethodEntity;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMethodMapper;
+import com.osheeep.server.dinner.record.entity.DinnerCookingRecordEntity;
+import com.osheeep.server.dinner.record.mapper.DinnerCookingRecordMapper;
 import com.osheeep.server.user.entity.UserEntity;
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -83,6 +85,7 @@ class DinnerMenuServiceTest {
     @Mock private DinnerImageAssetService imageAssetService;
     @Mock private DinnerRecipeCatalogAssembler catalogAssembler;
     @Mock private DinnerHouseholdActorLabelService actorLabelService;
+    @Mock private DinnerCookingRecordMapper recordMapper;
 
     private DinnerMenuService service;
 
@@ -93,7 +96,8 @@ class DinnerMenuServiceTest {
         Stream.of(
                         DinnerMenuEntity.class,
                         DinnerMenuSelectionEntity.class,
-                        DinnerMenuActionEntity.class)
+                        DinnerMenuActionEntity.class,
+                        DinnerCookingRecordEntity.class)
                 .forEach(entity -> TableInfoHelper.initTableInfo(assistant, entity));
         Clock clock = Clock.fixed(Instant.parse("2026-07-11T10:00:00Z"), ZoneOffset.UTC);
         lenient().when(actorLabelService.resolve(any(), any(), any()))
@@ -114,6 +118,11 @@ class DinnerMenuServiceTest {
                 actorLabelService,
                 new BusinessDateResolver(),
                 clock);
+        service.setRecordMapper(recordMapper);
+        DinnerCookingRecordEntity record = new DinnerCookingRecordEntity();
+        record.setId(91L);
+        record.setMenuId(31L);
+        lenient().when(recordMapper.selectOne(any())).thenReturn(record);
     }
 
     @Test
@@ -747,6 +756,45 @@ class DinnerMenuServiceTest {
     }
 
     @Test
+    void todayDoesNotExposeStaleConfirmationOrCompletionMetadataForDraft() {
+        DinnerMenuEntity draft = menu(31L);
+        draft.setConfirmedBy(8L);
+        draft.setConfirmedAt(LocalDateTime.of(2026, 7, 11, 9, 0));
+        draft.setCompletedBy(7L);
+        draft.setCompletedAt(LocalDateTime.of(2026, 7, 11, 9, 30));
+        stubTodayContext(draft);
+        when(selectionMapper.selectList(any())).thenReturn(List.of());
+
+        var result = service.today(7L);
+
+        assertThat(result.status()).isEqualTo("DRAFT");
+        assertThat(result.confirmedBy()).isNull();
+        assertThat(result.confirmedAt()).isNull();
+        assertThat(result.completedBy()).isNull();
+        assertThat(result.completedAt()).isNull();
+    }
+
+    @Test
+    void todayDoesNotExposeStaleCompletionMetadataWhileCooking() {
+        DinnerMenuEntity cooking = menu(31L);
+        cooking.setStatus("COOKING");
+        cooking.setConfirmedBy(8L);
+        cooking.setConfirmedAt(LocalDateTime.of(2026, 7, 11, 9, 0));
+        cooking.setCompletedBy(7L);
+        cooking.setCompletedAt(LocalDateTime.of(2026, 7, 11, 9, 30));
+        stubTodayContext(cooking);
+        when(selectionMapper.selectList(any())).thenReturn(List.of());
+
+        var result = service.today(7L);
+
+        assertThat(result.status()).isEqualTo("COOKING");
+        assertThat(result.confirmedBy()).isEqualTo(new HouseholdActorResponse("PARTNER"));
+        assertThat(result.confirmedAt()).isEqualTo(Instant.parse("2026-07-11T09:00:00Z"));
+        assertThat(result.completedBy()).isNull();
+        assertThat(result.completedAt()).isNull();
+    }
+
+    @Test
     void todayMapsDraftInsertLockFailureToVersionConflict() {
         when(householdAccessService.lockActiveHouseholdContext(7L))
                 .thenReturn(lockedContext(access()));
@@ -812,6 +860,7 @@ class DinnerMenuServiceTest {
                         systemSelection(31L, 7L, 2L)));
         when(recipeMapper.selectByIds(any())).thenReturn(recipes);
         when(catalogAssembler.assemble(recipes)).thenReturn(validCatalog(recipes));
+        when(menuMapper.clearConfirmationAndAdvanceVersion(31L, 4L)).thenReturn(1);
 
         var result = service.updateSelections(7L, List.of(1L, 2L), 4L);
 
@@ -819,6 +868,24 @@ class DinnerMenuServiceTest {
         assertThat(result.version()).isEqualTo(5L);
         assertThat(menu.getConfirmedBy()).isNull();
         verify(selectionMapper).delete(any());
+        verify(menuMapper).clearConfirmationAndAdvanceVersion(31L, 4L);
+        verify(menuMapper, never()).updateById(menu);
+    }
+
+    @Test
+    void cookingMenuRejectsSelectionChangesBeforeRecipeOrSelectionWrites() {
+        DinnerMenuEntity menu = menu(31L);
+        menu.setStatus("COOKING");
+        stubLockedContext(menu);
+
+        assertThatThrownBy(() -> service.updateSelections(7L, List.of(1L), 4L))
+                .isInstanceOfSatisfying(BusinessException.class, error ->
+                        assertThat(error.errorCode())
+                                .isEqualTo(ErrorCode.DINNER_MENU_COOKING));
+
+        verify(selectionMapper, never()).delete(any());
+        verify(selectionMapper, never()).insert(any(DinnerMenuSelectionEntity.class));
+        verifyNoInteractions(recipeMapper, catalogAssembler);
     }
 
     @Test

@@ -150,6 +150,39 @@ class DinnerInventoryDeductionServiceTest {
     }
 
     @Test
+    void proposalAggregatesPlannedAndTemporaryActualSnapshotsOnly() {
+        DinnerCookingRecordEntity record = record("PENDING");
+        when(householdAccessService.requireActiveHousehold(7L)).thenReturn(access());
+        when(recordMapper.selectById(91L)).thenReturn(record);
+        DinnerRecordDishSnapshotEntity planned = snapshot("""
+                [
+                  {"ingredientId":1,"name":"计划菜番茄","quantity":2,"unit":"个","required":true,"sortOrder":0}
+                ]
+                """, 0);
+        planned.setOrigin("PLANNED");
+        DinnerRecordDishSnapshotEntity temporary = snapshot("""
+                [
+                  {"ingredientId":2,"name":"临时菜鸡蛋","quantity":3,"unit":"枚","required":true,"sortOrder":0}
+                ]
+                """, 1);
+        temporary.setOrigin("TEMPORARY");
+        when(snapshotMapper.selectList(any())).thenReturn(List.of(planned, temporary));
+        when(inventoryMapper.selectList(any(Wrapper.class))).thenReturn(List.of(
+                inventory(1L, "5.000", "个", 1L),
+                inventory(2L, "6.000", "枚", 1L)));
+
+        var result = service.get(7L, 91L);
+
+        assertThat(result.proposalItems())
+                .extracting(item -> item.ingredientId())
+                .containsExactly(1L, 2L)
+                .doesNotContain(99L);
+        assertThat(result.proposalItems())
+                .extracting(item -> item.name())
+                .containsExactly("计划菜番茄", "临时菜鸡蛋");
+    }
+
+    @Test
     void applyLocksInOrderUpdatesOnceAndReplaysThePersistedTerminalResult() {
         DinnerCookingRecordEntity record = record("PENDING");
         stubLockedRecord(record);

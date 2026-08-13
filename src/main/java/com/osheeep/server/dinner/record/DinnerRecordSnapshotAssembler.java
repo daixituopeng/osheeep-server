@@ -1,6 +1,5 @@
 package com.osheeep.server.dinner.record;
 
-import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.osheeep.server.common.error.BusinessException;
 import com.osheeep.server.common.error.ErrorCode;
 import com.osheeep.server.dinner.image.DinnerImageAssetService;
@@ -63,6 +62,14 @@ public final class DinnerRecordSnapshotAssembler {
             Long householdId,
             List<DinnerMenuSelectionEntity> selections
     ) {
+        return assemble(householdId, selections, null);
+    }
+
+    private List<SnapshotDraft> assemble(
+            Long householdId,
+            List<DinnerMenuSelectionEntity> selections,
+            LockedSnapshotRows lockedRows
+    ) {
         if (householdId == null || selections == null || selections.isEmpty()) {
             throw invalidRecipe();
         }
@@ -88,28 +95,42 @@ public final class DinnerRecordSnapshotAssembler {
         }
 
         List<Long> recipeIds = identitiesByRecipe.keySet().stream().sorted().toList();
-        Map<Long, DinnerRecipeEntity> recipesById = mapRecipes(
-                recipeMapper.selectByIds(recipeIds), recipeIds);
-        List<DinnerRecipeIngredientRow> ingredientRows =
-                ingredientMapper.selectWithIngredientNames(recipeIds);
-
         List<Long> methodIds = identitiesByRecipe.values().stream()
                 .map(SelectionIdentity::methodId)
                 .filter(Objects::nonNull)
                 .distinct()
                 .sorted()
                 .toList();
-        Map<Long, DinnerRecipeMethodEntity> methodsById = methodIds.isEmpty()
-                ? Map.of()
-                : mapMethods(methodMapper.selectByIds(methodIds), methodIds);
-        List<DinnerRecipeMethodStepEntity> stepRows = methodIds.isEmpty()
-                ? List.of()
-                : stepMapper.selectList(
-                        Wrappers.<DinnerRecipeMethodStepEntity>lambdaQuery()
-                                .in(DinnerRecipeMethodStepEntity::getMethodId, methodIds)
-                                .orderByAsc(DinnerRecipeMethodStepEntity::getMethodId)
-                                .orderByAsc(DinnerRecipeMethodStepEntity::getSortOrder)
-                                .orderByAsc(DinnerRecipeMethodStepEntity::getId));
+        List<DinnerRecipeEntity> recipeRows;
+        List<DinnerRecipeIngredientRow> ingredientRows;
+        List<DinnerRecipeMethodEntity> methodRows;
+        List<DinnerRecipeMethodStepEntity> stepRows;
+        Map<Long, DinnerRecipeEntity> recipesById;
+        Map<Long, DinnerRecipeMethodEntity> methodsById;
+        if (lockedRows == null) {
+            recipeRows = recipeMapper.selectByIdsForUpdate(recipeIds);
+            recipesById = mapRecipes(recipeRows, recipeIds);
+            ingredientMapper.selectByRecipeIdsForUpdate(recipeIds);
+            ingredientRows = ingredientMapper.selectWithIngredientNames(recipeIds);
+            methodRows = methodIds.isEmpty()
+                    ? List.of()
+                    : methodMapper.selectByRecipeIdsForUpdate(recipeIds);
+            methodsById = methodIds.isEmpty()
+                    ? Map.of()
+                    : mapMethods(methodRows, methodIds, recipeIds);
+            stepRows = methodIds.isEmpty()
+                    ? List.of()
+                    : stepMapper.selectByMethodIdsForUpdate(methodIds);
+        } else {
+            recipeRows = lockedRows.recipes();
+            ingredientRows = lockedRows.ingredients();
+            methodRows = lockedRows.methods();
+            stepRows = lockedRows.steps();
+            recipesById = mapRecipes(recipeRows, recipeIds);
+            methodsById = methodIds.isEmpty()
+                    ? Map.of()
+                    : mapMethods(methodRows, methodIds, recipeIds);
+        }
 
         List<Long> imageAssetIds = recipesById.values().stream()
                 .filter(recipe -> "HOUSEHOLD".equals(recipe.getScope()))
@@ -148,7 +169,7 @@ public final class DinnerRecordSnapshotAssembler {
                         recipeId, "SYSTEM", 1L, recipe.getName(), recipe.getImagePath(),
                         recipe.getCategory(), recipe.getFlavor(), recipe.getServings(),
                         recipe.getEstimatedMinutes(), selectorsByRecipe.get(recipeId),
-                        null, null, null, List.of(), ingredients));
+                        null, null, null, null, List.of(), ingredients));
                 continue;
             }
 
@@ -176,9 +197,75 @@ public final class DinnerRecordSnapshotAssembler {
                     image.listUrl(), recipe.getCategory(), recipe.getFlavor(),
                     recipe.getServings(), recipe.getEstimatedMinutes(),
                     selectorsByRecipe.get(recipeId), method.getId(), method.getName(),
-                    method.getCookingStyle(), steps, ingredients));
+                    method.getCookingStyle(), method.getEstimatedMinutes(), steps, ingredients));
         }
         return List.copyOf(drafts);
+    }
+
+    public SnapshotDraft assembleCurrentRecipe(
+            Long householdId,
+            Long userId,
+            Long recipeId,
+            Long requestedMethodId
+    ) {
+        if (householdId == null
+                || userId == null
+                || recipeId == null
+                || recipeId <= 0
+                || (requestedMethodId != null && requestedMethodId <= 0)) {
+            throw invalidRecipe();
+        }
+        List<Long> recipeIds = List.of(recipeId);
+        List<DinnerRecipeEntity> recipeRows =
+                recipeMapper.selectByIdsForUpdate(recipeIds);
+        DinnerRecipeEntity recipe = mapRecipes(recipeRows, recipeIds).get(recipeId);
+        if (recipe == null || !"PUBLISHED".equals(recipe.getStatus())) {
+            throw invalidRecipe();
+        }
+        boolean systemRecipe = "SYSTEM".equals(recipe.getScope())
+                && recipe.getHouseholdId() == null
+                && requestedMethodId == null;
+        boolean householdRecipe = "HOUSEHOLD".equals(recipe.getScope())
+                && Objects.equals(recipe.getHouseholdId(), householdId)
+                && recipe.getVersion() != null
+                && recipe.getVersion() > 0;
+        if (!systemRecipe && !householdRecipe) {
+            throw invalidRecipe();
+        }
+        ingredientMapper.selectByRecipeIdsForUpdate(recipeIds);
+        List<DinnerRecipeIngredientRow> ingredientRows =
+                ingredientMapper.selectWithIngredientNames(recipeIds);
+
+        Long recipeVersion;
+        Long methodId;
+        List<DinnerRecipeMethodEntity> methodRows = List.of();
+        List<DinnerRecipeMethodStepEntity> stepRows = List.of();
+        if (systemRecipe) {
+            recipeVersion = 1L;
+            methodId = null;
+        } else {
+            methodRows = methodMapper.selectByRecipeIdsForUpdate(recipeIds);
+            DinnerRecipeMethodEntity method = resolveCurrentMethod(
+                    methodRows, recipeId, requestedMethodId);
+            recipeVersion = recipe.getVersion();
+            methodId = method.getId();
+            stepRows = stepMapper.selectByMethodIdsForUpdate(List.of(methodId));
+        }
+
+        DinnerMenuSelectionEntity selection = new DinnerMenuSelectionEntity();
+        selection.setUserId(userId);
+        selection.setRecipeId(recipeId);
+        selection.setRecipeVersion(recipeVersion);
+        selection.setMethodId(methodId);
+        List<SnapshotDraft> drafts = assemble(
+                householdId,
+                List.of(selection),
+                new LockedSnapshotRows(
+                        recipeRows, ingredientRows, methodRows, stepRows));
+        if (drafts.size() != 1) {
+            throw invalidRecipe();
+        }
+        return drafts.getFirst();
     }
 
     private Map<Long, DinnerRecipeEntity> mapRecipes(
@@ -201,20 +288,54 @@ public final class DinnerRecordSnapshotAssembler {
 
     private Map<Long, DinnerRecipeMethodEntity> mapMethods(
             List<DinnerRecipeMethodEntity> rows,
-            List<Long> expectedIds
+            List<Long> expectedIds,
+            List<Long> expectedRecipeIds
     ) {
-        Map<Long, DinnerRecipeMethodEntity> byId = new HashMap<>();
+        Set<Long> recipeIds = new HashSet<>(expectedRecipeIds);
+        Map<Long, DinnerRecipeMethodEntity> allById = new HashMap<>();
         for (DinnerRecipeMethodEntity row : rows) {
             if (row == null
                     || row.getId() == null
-                    || byId.putIfAbsent(row.getId(), row) != null) {
+                    || row.getRecipeId() == null
+                    || !recipeIds.contains(row.getRecipeId())
+                    || allById.putIfAbsent(row.getId(), row) != null) {
                 throw invalidRecipe();
             }
         }
-        if (!byId.keySet().equals(new LinkedHashSet<>(expectedIds))) {
+        Map<Long, DinnerRecipeMethodEntity> selectedById = new HashMap<>();
+        for (Long expectedId : expectedIds) {
+            DinnerRecipeMethodEntity selected = allById.get(expectedId);
+            if (selected == null) {
+                throw invalidRecipe();
+            }
+            selectedById.put(expectedId, selected);
+        }
+        return selectedById;
+    }
+
+    private DinnerRecipeMethodEntity resolveCurrentMethod(
+            List<DinnerRecipeMethodEntity> rows,
+            Long recipeId,
+            Long requestedMethodId
+    ) {
+        Map<Long, DinnerRecipeMethodEntity> methodsById =
+                mapMethods(rows, rows.stream()
+                        .filter(Objects::nonNull)
+                        .map(DinnerRecipeMethodEntity::getId)
+                        .filter(Objects::nonNull)
+                        .distinct()
+                        .sorted()
+                        .toList(), List.of(recipeId));
+        List<DinnerRecipeMethodEntity> candidates = methodsById.values().stream()
+                .filter(method -> "ACTIVE".equals(method.getStatus()))
+                .filter(method -> requestedMethodId == null
+                        ? Boolean.TRUE.equals(method.getIsDefault())
+                        : Objects.equals(method.getId(), requestedMethodId))
+                .toList();
+        if (candidates.size() != 1) {
             throw invalidRecipe();
         }
-        return byId;
+        return candidates.getFirst();
     }
 
     private Map<Long, List<RecordIngredientSnapshotResponse>> mapIngredients(
@@ -389,6 +510,7 @@ public final class DinnerRecordSnapshotAssembler {
             Long methodId,
             String methodName,
             String cookingStyle,
+            Integer methodEstimatedMinutes,
             List<RecordMethodStepSnapshotResponse> steps,
             List<RecordIngredientSnapshotResponse> ingredients
     ) {
@@ -398,8 +520,38 @@ public final class DinnerRecordSnapshotAssembler {
             steps = List.copyOf(steps);
             ingredients = List.copyOf(ingredients);
         }
+
+        public SnapshotDraft(
+                Long recipeId,
+                String scope,
+                Long recipeVersion,
+                String name,
+                String imagePath,
+                String category,
+                String flavor,
+                Integer servings,
+                Integer estimatedMinutes,
+                Set<Long> selectedByUserIds,
+                Long methodId,
+                String methodName,
+                String cookingStyle,
+                List<RecordMethodStepSnapshotResponse> steps,
+                List<RecordIngredientSnapshotResponse> ingredients
+        ) {
+            this(recipeId, scope, recipeVersion, name, imagePath, category, flavor,
+                    servings, estimatedMinutes, selectedByUserIds, methodId, methodName,
+                    cookingStyle, null, steps, ingredients);
+        }
     }
 
     private record SelectionIdentity(Long recipeVersion, Long methodId) {
+    }
+
+    private record LockedSnapshotRows(
+            List<DinnerRecipeEntity> recipes,
+            List<DinnerRecipeIngredientRow> ingredients,
+            List<DinnerRecipeMethodEntity> methods,
+            List<DinnerRecipeMethodStepEntity> steps
+    ) {
     }
 }

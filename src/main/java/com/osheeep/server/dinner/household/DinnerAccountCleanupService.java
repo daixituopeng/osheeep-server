@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.osheeep.server.common.error.BusinessException;
 import com.osheeep.server.common.error.ErrorCode;
+import com.osheeep.server.dinner.cooking.entity.DinnerMenuCookingDishEntity;
+import com.osheeep.server.dinner.cooking.mapper.DinnerMenuCookingDishMapper;
 import com.osheeep.server.dinner.household.entity.DinnerHouseholdEntity;
 import com.osheeep.server.dinner.household.entity.DinnerHouseholdMemberEntity;
 import com.osheeep.server.dinner.household.entity.DinnerHouseholdOperationEntity;
@@ -62,6 +64,7 @@ public class DinnerAccountCleanupService {
     private DinnerNotificationMapper notificationMapper;
     private DinnerSubscriptionDeliveryMapper subscriptionDeliveryMapper;
     private DinnerRecipePreferenceMapper recipePreferenceMapper;
+    private DinnerMenuCookingDishMapper cookingDishMapper;
 
     public DinnerAccountCleanupService(
             DinnerHouseholdMapper householdMapper,
@@ -109,6 +112,11 @@ public class DinnerAccountCleanupService {
     @Autowired(required = false)
     void setRecipePreferenceMapper(DinnerRecipePreferenceMapper recipePreferenceMapper) {
         this.recipePreferenceMapper = Objects.requireNonNull(recipePreferenceMapper);
+    }
+
+    @Autowired
+    void setCookingDishMapper(DinnerMenuCookingDishMapper cookingDishMapper) {
+        this.cookingDishMapper = Objects.requireNonNull(cookingDishMapper);
     }
 
     /** Called only from {@link com.osheeep.server.user.AccountDeletionTransaction}. */
@@ -194,6 +202,11 @@ public class DinnerAccountCleanupService {
         List<DinnerMenuSelectionEntity> selections = menuIds.isEmpty()
                 ? List.of()
                 : requireList(selectionMapper.selectByMenuIdsForUpdate(menuIds));
+        List<DinnerMenuCookingDishEntity> cookingDishes =
+                menuIds.isEmpty() || cookingDishMapper == null
+                        ? List.of()
+                        : requireList(cookingDishMapper.selectByMenuIdsForUpdate(menuIds));
+        validateCookingRows(menuIds, cookingDishes);
 
         LockedPrivateDrafts privateDrafts = lockPrivateDrafts(userId);
         List<DinnerRecipePreferenceEntity> currentRecipePreferences =
@@ -210,6 +223,13 @@ public class DinnerAccountCleanupService {
             }
         }
         if (!menuIds.isEmpty()) {
+            if (cookingDishMapper != null
+                    && cookingDishMapper.delete(
+                            Wrappers.<DinnerMenuCookingDishEntity>lambdaQuery()
+                                    .in(DinnerMenuCookingDishEntity::getMenuId, menuIds))
+                            != cookingDishes.size()) {
+                throw householdVersionConflict();
+            }
             long actorSelectionCount = selections.stream()
                     .filter(selection -> selection != null
                             && Objects.equals(userId, selection.getUserId()))
@@ -276,6 +296,29 @@ public class DinnerAccountCleanupService {
 
     private void purgePrivateDrafts(Long userId) {
         deletePrivateDrafts(lockPrivateDrafts(userId));
+    }
+
+    private void validateCookingRows(
+            List<Long> menuIds,
+            List<DinnerMenuCookingDishEntity> cookingDishes
+    ) {
+        Set<Long> allowedMenuIds = Set.copyOf(menuIds);
+        Long previousMenuId = null;
+        Long previousId = null;
+        for (DinnerMenuCookingDishEntity row : cookingDishes) {
+            if (row == null
+                    || row.getId() == null
+                    || row.getMenuId() == null
+                    || !allowedMenuIds.contains(row.getMenuId())
+                    || previousMenuId != null
+                    && (row.getMenuId() < previousMenuId
+                            || row.getMenuId().equals(previousMenuId)
+                            && row.getId() <= previousId)) {
+                throw householdVersionConflict();
+            }
+            previousMenuId = row.getMenuId();
+            previousId = row.getId();
+        }
     }
 
     private LockedPrivateDrafts lockPrivateDrafts(Long userId) {

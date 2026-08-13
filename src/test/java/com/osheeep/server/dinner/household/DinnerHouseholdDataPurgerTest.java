@@ -9,6 +9,8 @@ import static org.mockito.Mockito.when;
 
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.osheeep.server.dinner.cooking.entity.DinnerMenuCookingDishEntity;
+import com.osheeep.server.dinner.cooking.mapper.DinnerMenuCookingDishMapper;
 import com.osheeep.server.dinner.household.entity.DinnerHouseholdEntity;
 import com.osheeep.server.dinner.household.entity.DinnerHouseholdMemberEntity;
 import com.osheeep.server.dinner.household.entity.DinnerHouseholdOperationEntity;
@@ -23,6 +25,8 @@ import com.osheeep.server.dinner.ingredient.entity.DinnerIngredientEntity;
 import com.osheeep.server.dinner.ingredient.mapper.DinnerHouseholdInventoryMapper;
 import com.osheeep.server.dinner.ingredient.mapper.DinnerIngredientMapper;
 import com.osheeep.server.dinner.menu.entity.DinnerMenuEntity;
+import com.osheeep.server.dinner.menu.entity.DinnerMenuActionEntity;
+import com.osheeep.server.dinner.menu.entity.DinnerMenuSelectionEntity;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuActionMapper;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuMapper;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuSelectionMapper;
@@ -72,6 +76,7 @@ class DinnerHouseholdDataPurgerTest {
     @Mock private DinnerIngredientMapper ingredientMapper;
     @Mock private DinnerSubscriptionDeliveryMapper subscriptionDeliveryMapper;
     @Mock private DinnerRecipePreferenceMapper recipePreferenceMapper;
+    @Mock private DinnerMenuCookingDishMapper cookingDishMapper;
 
     private DinnerHouseholdDataPurger purger;
 
@@ -82,6 +87,8 @@ class DinnerHouseholdDataPurgerTest {
         List.of(DinnerHouseholdEntity.class, DinnerHouseholdMemberEntity.class,
                         DinnerHouseholdOperationEntity.class, DinnerInviteCodeEntity.class,
                         DinnerMenuEntity.class, DinnerCookingRecordEntity.class,
+                        DinnerMenuActionEntity.class, DinnerMenuSelectionEntity.class,
+                        DinnerMenuCookingDishEntity.class,
                         DinnerRecipeEntity.class, DinnerRecipeMethodEntity.class,
                         DinnerRecipeMethodStepEntity.class, DinnerRecipeIngredientEntity.class,
                         DinnerRecipePreferenceEntity.class,
@@ -99,6 +106,7 @@ class DinnerHouseholdDataPurgerTest {
                 ingredientMapper);
         purger.setSubscriptionDeliveryMapper(subscriptionDeliveryMapper);
         purger.setRecipePreferenceMapper(recipePreferenceMapper);
+        purger.setCookingDishMapper(cookingDishMapper);
     }
 
     @Test
@@ -164,8 +172,19 @@ class DinnerHouseholdDataPurgerTest {
         recipeIngredient.setId(81L);
         recipeIngredient.setRecipeId(51L);
 
+        DinnerMenuEntity menu = new DinnerMenuEntity();
+        menu.setId(21L);
+        menu.setHouseholdId(11L);
+        DinnerMenuCookingDishEntity cookingDish = new DinnerMenuCookingDishEntity();
+        cookingDish.setId(22L);
+        cookingDish.setMenuId(21L);
         when(inviteMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of());
-        when(menuMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of());
+        when(menuMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of(menu));
+        when(selectionMapper.selectByMenuIdsForUpdate(List.of(21L)))
+                .thenReturn(List.of());
+        when(cookingDishMapper.selectByMenuIdsForUpdate(List.of(21L)))
+                .thenReturn(List.of(cookingDish));
+        when(actionMapper.selectByMenuIdsForUpdate(List.of(21L))).thenReturn(List.of());
         when(recordMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of());
         when(recipeMapper.selectByHouseholdId(11L)).thenReturn(List.of(recipe));
         when(recipeMapper.selectList(any())).thenReturn(List.of());
@@ -205,6 +224,14 @@ class DinnerHouseholdDataPurgerTest {
         lockOrder.verify(inventoryMapper).selectAllByHouseholdIdForUpdate(11L);
         lockOrder.verify(ingredientMapper).selectAllHouseholdIngredientsForUpdate(11L);
         lockOrder.verify(operationMapper).selectAllByHouseholdIdForUpdate(11L);
+        InOrder menuChildOrder = inOrder(
+                menuMapper, selectionMapper, cookingDishMapper, actionMapper, recordMapper);
+        menuChildOrder.verify(menuMapper).selectAllByHouseholdIdForUpdate(11L);
+        menuChildOrder.verify(selectionMapper).selectByMenuIdsForUpdate(List.of(21L));
+        menuChildOrder.verify(cookingDishMapper).selectByMenuIdsForUpdate(List.of(21L));
+        menuChildOrder.verify(actionMapper).selectByMenuIdsForUpdate(List.of(21L));
+        menuChildOrder.verify(recordMapper).selectAllByHouseholdIdForUpdate(11L);
+        verify(cookingDishMapper).delete(any());
     }
 
     @Test

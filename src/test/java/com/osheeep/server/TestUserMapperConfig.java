@@ -1,6 +1,7 @@
 package com.osheeep.server;
 
 import com.osheeep.server.job.JobMapper;
+import com.osheeep.server.dinner.cooking.mapper.DinnerMenuCookingDishMapper;
 import com.osheeep.server.dinner.household.mapper.DinnerHouseholdMapper;
 import com.osheeep.server.dinner.household.mapper.DinnerHouseholdMemberMapper;
 import com.osheeep.server.dinner.household.mapper.DinnerHouseholdOperationMapper;
@@ -131,6 +132,11 @@ public class TestUserMapperConfig {
     @Bean
     public DinnerMenuActionMapper dinnerMenuActionMapper() {
         return Mockito.mock(DinnerMenuActionMapper.class);
+    }
+
+    @Bean
+    public DinnerMenuCookingDishMapper dinnerMenuCookingDishMapper() {
+        return Mockito.mock(DinnerMenuCookingDishMapper.class);
     }
 
     @Bean

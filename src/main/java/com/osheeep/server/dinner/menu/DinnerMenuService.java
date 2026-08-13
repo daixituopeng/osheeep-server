@@ -31,6 +31,8 @@ import com.osheeep.server.dinner.recipe.entity.DinnerRecipeEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeMethodEntity;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMapper;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeMethodMapper;
+import com.osheeep.server.dinner.record.entity.DinnerCookingRecordEntity;
+import com.osheeep.server.dinner.record.mapper.DinnerCookingRecordMapper;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -69,6 +71,7 @@ public class DinnerMenuService {
     private final Clock clock;
     private DinnerNotificationPublisher notificationPublisher =
             DinnerNotificationPublisher.noop();
+    private DinnerCookingRecordMapper recordMapper;
 
     @Autowired
     public DinnerMenuService(
@@ -117,6 +120,11 @@ public class DinnerMenuService {
     @Autowired(required = false)
     void setNotificationPublisher(DinnerNotificationPublisher notificationPublisher) {
         this.notificationPublisher = Objects.requireNonNull(notificationPublisher);
+    }
+
+    @Autowired
+    void setRecordMapper(DinnerCookingRecordMapper recordMapper) {
+        this.recordMapper = Objects.requireNonNull(recordMapper);
     }
 
     @Transactional
@@ -288,12 +296,18 @@ public class DinnerMenuService {
         }
         boolean reconfirmRequired = "CONFIRMED".equals(menu.getStatus());
         if (reconfirmRequired) {
+            if (menuMapper.clearConfirmationAndAdvanceVersion(
+                    menu.getId(), menu.getVersion()) != 1) {
+                throw new BusinessException(ErrorCode.DINNER_MENU_VERSION_CONFLICT);
+            }
             menu.setStatus("DRAFT");
             menu.setConfirmedBy(null);
             menu.setConfirmedAt(null);
+            menu.setVersion(menu.getVersion() + 1);
+        } else {
+            menu.setVersion(menu.getVersion() + 1);
+            menuMapper.updateById(menu);
         }
-        menu.setVersion(menu.getVersion() + 1);
-        menuMapper.updateById(menu);
         DinnerNotificationType type = reconfirmRequired
                 ? DinnerNotificationType.MENU_RECONFIRM_REQUIRED
                 : DinnerNotificationType.PARTNER_SELECTION_UPDATED;
@@ -544,10 +558,18 @@ public class DinnerMenuService {
             throw invalidRecipe();
         }
 
+        boolean confirmationVisible = Set.of("CONFIRMED", "COOKING", "COMPLETED")
+                .contains(menu.getStatus());
+        boolean completionVisible = "COMPLETED".equals(menu.getStatus());
+        Long confirmedBy = confirmationVisible ? menu.getConfirmedBy() : null;
+        LocalDateTime confirmedAt = confirmationVisible ? menu.getConfirmedAt() : null;
+        Long completedBy = completionVisible ? menu.getCompletedBy() : null;
+        LocalDateTime completedAt = completionVisible ? menu.getCompletedAt() : null;
+
         Set<Long> actorUserIds = new LinkedHashSet<>();
         selectorsByRecipe.values().forEach(actorUserIds::addAll);
-        actorUserIds.add(menu.getConfirmedBy());
-        actorUserIds.add(menu.getCompletedBy());
+        actorUserIds.add(confirmedBy);
+        actorUserIds.add(completedBy);
         Map<Long, HouseholdActorResponse> actors = actorLabelService.resolve(
                 menu.getHouseholdId(), currentUserId, actorUserIds);
 
@@ -616,12 +638,28 @@ public class DinnerMenuService {
                 .distinct()
                 .count());
 
+        Long recordId = completedRecordId(menu);
         return new TodayMenuResponse(
                 menu.getId(), menu.getMenuDate(), menu.getStatus(), menu.getVersion(),
                 selectedRecipeIds.size(), partnerSelectionCount, consensusCount,
-                selectedRecipeIds, dishes, nullableActor(menu.getConfirmedBy(), actors),
-                instant(menu.getConfirmedAt()), nullableActor(menu.getCompletedBy(), actors),
-                instant(menu.getCompletedAt()), null, true);
+                selectedRecipeIds, dishes, nullableActor(confirmedBy, actors),
+                instant(confirmedAt), nullableActor(completedBy, actors),
+                instant(completedAt), recordId, true);
+    }
+
+    private Long completedRecordId(DinnerMenuEntity menu) {
+        if (!"COMPLETED".equals(menu.getStatus())) {
+            return null;
+        }
+        Objects.requireNonNull(recordMapper, "Dinner record mapper is required");
+        DinnerCookingRecordEntity record = recordMapper.selectOne(
+                Wrappers.<DinnerCookingRecordEntity>lambdaQuery()
+                        .eq(DinnerCookingRecordEntity::getMenuId, menu.getId())
+                        .last("LIMIT 1"));
+        if (record == null || record.getId() == null) {
+            throw new IllegalStateException("Completed dinner menu record is missing");
+        }
+        return record.getId();
     }
 
     private String source(List<HouseholdActorResponse> selectedBy) {
@@ -736,6 +774,9 @@ public class DinnerMenuService {
     }
 
     private void requireMutable(DinnerMenuEntity menu) {
+        if ("COOKING".equals(menu.getStatus())) {
+            throw new BusinessException(ErrorCode.DINNER_MENU_COOKING);
+        }
         if ("COMPLETED".equals(menu.getStatus())) {
             throw new BusinessException(ErrorCode.DINNER_MENU_COMPLETED);
         }

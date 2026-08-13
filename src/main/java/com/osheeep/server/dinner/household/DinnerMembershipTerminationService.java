@@ -1,8 +1,11 @@
 package com.osheeep.server.dinner.household;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.osheeep.server.common.error.BusinessException;
 import com.osheeep.server.common.error.ErrorCode;
+import com.osheeep.server.dinner.cooking.entity.DinnerMenuCookingDishEntity;
+import com.osheeep.server.dinner.cooking.mapper.DinnerMenuCookingDishMapper;
 import com.osheeep.server.dinner.household.DinnerHouseholdDraftLifecycleService.LockedTerminationRecipes;
 import com.osheeep.server.dinner.household.DinnerHouseholdOperationService.HouseholdOperationCommand;
 import com.osheeep.server.dinner.household.dto.HouseholdMutationResponse;
@@ -66,6 +69,7 @@ public class DinnerMembershipTerminationService {
     private DinnerNotificationPublisher notificationPublisher =
             DinnerNotificationPublisher.noop();
     private DinnerRecipePreferenceMapper recipePreferenceMapper;
+    private DinnerMenuCookingDishMapper cookingDishMapper;
 
     @Autowired
     public DinnerMembershipTerminationService(
@@ -134,6 +138,11 @@ public class DinnerMembershipTerminationService {
         this.recipePreferenceMapper = Objects.requireNonNull(recipePreferenceMapper);
     }
 
+    @Autowired
+    void setCookingDishMapper(DinnerMenuCookingDishMapper cookingDishMapper) {
+        this.cookingDishMapper = Objects.requireNonNull(cookingDishMapper);
+    }
+
     @Transactional
     public HouseholdMutationResponse terminate(HouseholdOperationCommand command) {
         try {
@@ -173,6 +182,7 @@ public class DinnerMembershipTerminationService {
         List<DinnerMenuEntity> menus = lockUncompletedMenus(householdId);
         List<Long> menuIds = menus.stream().map(DinnerMenuEntity::getId).toList();
         List<DinnerMenuSelectionEntity> selections = lockSelections(menuIds);
+        List<DinnerMenuCookingDishEntity> cookingDishes = lockCookingDishes(menuIds);
         LockedTerminationRecipes recipes =
                 draftLifecycleService.lockTerminationRecipes(
                         targetUserId, householdId);
@@ -191,7 +201,7 @@ public class DinnerMembershipTerminationService {
         }
 
         revokeOpenInvites(invites, householdId, now);
-        resetMenus(menus, selections, menuIds, householdId, targetUserId);
+        resetMenus(menus, selections, cookingDishes, menuIds, householdId, targetUserId);
         draftLifecycleService.detachPersonalDrafts(
                 targetUserId,
                 householdId,
@@ -394,7 +404,8 @@ public class DinnerMembershipTerminationService {
                     || menu.getId() == null
                     || !Objects.equals(householdId, menu.getHouseholdId())
                     || !("DRAFT".equals(menu.getStatus())
-                    || "CONFIRMED".equals(menu.getStatus()))
+                    || "CONFIRMED".equals(menu.getStatus())
+                    || "COOKING".equals(menu.getStatus()))
                     || menu.getVersion() == null
                     || menu.getVersion() < 0
                     || (previousId != null && menu.getId() <= previousId)) {
@@ -436,6 +447,35 @@ public class DinnerMembershipTerminationService {
         return List.copyOf(selections);
     }
 
+    private List<DinnerMenuCookingDishEntity> lockCookingDishes(List<Long> menuIds) {
+        if (menuIds.isEmpty() || cookingDishMapper == null) {
+            return List.of();
+        }
+        List<DinnerMenuCookingDishEntity> rows =
+                cookingDishMapper.selectByMenuIdsForUpdate(menuIds);
+        if (rows == null) {
+            throw householdVersionConflict();
+        }
+        Set<Long> allowedMenuIds = Set.copyOf(menuIds);
+        Long previousMenuId = null;
+        Long previousId = null;
+        for (DinnerMenuCookingDishEntity row : rows) {
+            if (row == null
+                    || row.getId() == null
+                    || row.getMenuId() == null
+                    || !allowedMenuIds.contains(row.getMenuId())
+                    || previousMenuId != null
+                    && (row.getMenuId() < previousMenuId
+                            || row.getMenuId().equals(previousMenuId)
+                            && row.getId() <= previousId)) {
+                throw householdVersionConflict();
+            }
+            previousMenuId = row.getMenuId();
+            previousId = row.getId();
+        }
+        return List.copyOf(rows);
+    }
+
     private void validateInventory(
             Long householdId,
             List<DinnerHouseholdInventoryEntity> inventory
@@ -471,12 +511,20 @@ public class DinnerMembershipTerminationService {
     private void resetMenus(
             List<DinnerMenuEntity> menus,
             List<DinnerMenuSelectionEntity> selections,
+            List<DinnerMenuCookingDishEntity> cookingDishes,
             List<Long> menuIds,
             Long householdId,
             Long targetUserId
     ) {
         if (menuIds.isEmpty()) {
             return;
+        }
+        if (cookingDishMapper != null
+                && cookingDishMapper.delete(
+                        Wrappers.<DinnerMenuCookingDishEntity>lambdaQuery()
+                                .in(DinnerMenuCookingDishEntity::getMenuId, menuIds))
+                        != cookingDishes.size()) {
+            throw householdVersionConflict();
         }
         long targetSelectionCount = selections.stream()
                 .filter(selection -> Objects.equals(targetUserId, selection.getUserId()))

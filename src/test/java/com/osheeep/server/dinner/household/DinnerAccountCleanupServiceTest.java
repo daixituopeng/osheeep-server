@@ -9,8 +9,11 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.osheeep.server.dinner.cooking.entity.DinnerMenuCookingDishEntity;
+import com.osheeep.server.dinner.cooking.mapper.DinnerMenuCookingDishMapper;
 import com.osheeep.server.dinner.household.entity.DinnerHouseholdEntity;
 import com.osheeep.server.dinner.household.entity.DinnerHouseholdMemberEntity;
 import com.osheeep.server.dinner.household.entity.DinnerHouseholdOperationEntity;
@@ -21,6 +24,7 @@ import com.osheeep.server.dinner.household.mapper.DinnerHouseholdOperationMapper
 import com.osheeep.server.dinner.household.mapper.DinnerInviteCodeMapper;
 import com.osheeep.server.dinner.ingredient.mapper.DinnerHouseholdInventoryMapper;
 import com.osheeep.server.dinner.ingredient.mapper.DinnerIngredientMapper;
+import com.osheeep.server.dinner.menu.entity.DinnerMenuEntity;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuMapper;
 import com.osheeep.server.dinner.menu.mapper.DinnerMenuSelectionMapper;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeEntity;
@@ -66,6 +70,7 @@ class DinnerAccountCleanupServiceTest {
     @Mock private DinnerHouseholdDataPurger dataPurger;
     @Mock private DinnerSubscriptionDeliveryMapper subscriptionDeliveryMapper;
     @Mock private DinnerRecipePreferenceMapper recipePreferenceMapper;
+    @Mock private DinnerMenuCookingDishMapper cookingDishMapper;
 
     private DinnerAccountCleanupService service;
 
@@ -77,7 +82,8 @@ class DinnerAccountCleanupServiceTest {
                         DinnerInviteCodeEntity.class, DinnerRecipeEntity.class,
                         DinnerRecipeIngredientEntity.class, DinnerRecipeMethodEntity.class,
                         DinnerRecipeMethodStepEntity.class,
-                        DinnerRecipePreferenceEntity.class)
+                        DinnerRecipePreferenceEntity.class,
+                        DinnerMenuCookingDishEntity.class)
                 .forEach(type -> TableInfoHelper.initTableInfo(assistant, type));
     }
 
@@ -89,6 +95,9 @@ class DinnerAccountCleanupServiceTest {
                 methodMapper, stepMapper, inventoryMapper, ingredientMapper, dataPurger);
         service.setSubscriptionDeliveryMapper(subscriptionDeliveryMapper);
         service.setRecipePreferenceMapper(recipePreferenceMapper);
+        service.setCookingDishMapper(cookingDishMapper);
+        lenient().when(cookingDishMapper.selectByMenuIdsForUpdate(any()))
+                .thenReturn(List.of());
         lenient().when(recipeMapper.selectList(any())).thenReturn(List.of());
         lenient().when(memberMapper.selectIdsByUserId(7L)).thenReturn(List.of());
         lenient().when(operationMapper.selectByActorOrTargetMembershipIdsForUpdate(
@@ -127,7 +136,22 @@ class DinnerAccountCleanupServiceTest {
         when(memberMapper.selectByIdsForUpdate(List.of(9L, 31L, 32L)))
                 .thenReturn(List.of(historical, owner, member));
         when(inviteMapper.selectAllOpenByHouseholdIdForUpdate(11L)).thenReturn(List.of());
-        when(menuMapper.selectUncompletedByHouseholdIdForUpdate(11L)).thenReturn(List.of());
+        DinnerMenuEntity cookingMenu = new DinnerMenuEntity();
+        cookingMenu.setId(21L);
+        cookingMenu.setHouseholdId(11L);
+        cookingMenu.setStatus("COOKING");
+        cookingMenu.setVersion(5L);
+        when(menuMapper.selectUncompletedByHouseholdIdForUpdate(11L))
+                .thenReturn(List.of(cookingMenu));
+        when(selectionMapper.selectByMenuIdsForUpdate(List.of(21L)))
+                .thenReturn(List.of());
+        DinnerMenuCookingDishEntity cookingDish = new DinnerMenuCookingDishEntity();
+        cookingDish.setId(101L);
+        cookingDish.setMenuId(21L);
+        when(cookingDishMapper.selectByMenuIdsForUpdate(List.of(21L)))
+                .thenReturn(List.of(cookingDish));
+        when(cookingDishMapper.delete(any(Wrapper.class))).thenReturn(1);
+        when(menuMapper.resetUncompletedMenus(11L, List.of(21L))).thenReturn(1);
         when(inventoryMapper.selectAllByHouseholdIdForUpdate(11L)).thenReturn(List.of());
         when(ingredientMapper.selectAllHouseholdIngredientsForUpdate(11L))
                 .thenReturn(List.of());
@@ -155,6 +179,9 @@ class DinnerAccountCleanupServiceTest {
         verify(memberMapper).deleteBatchIds(List.of(9L));
         verify(recipePreferenceMapper).deleteByMembershipId(32L);
         verify(recipePreferenceMapper).deleteByUserId(7L);
+        verify(cookingDishMapper).selectByMenuIdsForUpdate(List.of(21L));
+        verify(cookingDishMapper).delete(any(Wrapper.class));
+        verify(menuMapper).resetUncompletedMenus(11L, List.of(21L));
         verify(memberMapper, never()).promoteActiveMember(any(), any(), any(), any());
         verify(householdMapper).advanceMembershipAndInviteRevision(11L, 8L, 4L);
         verifyNoInteractions(dataPurger);
