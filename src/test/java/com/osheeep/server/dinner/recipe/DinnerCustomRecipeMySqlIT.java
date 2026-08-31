@@ -19,6 +19,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.osheeep.server.common.security.CurrentUser;
 import com.osheeep.server.common.security.JwtService;
+import com.osheeep.server.dinner.cooking.dto.StartCookingRequest;
+import com.osheeep.server.dinner.cooking.dto.UpdateCookingDishCompletionRequest;
 import com.osheeep.server.dinner.menu.dto.MenuActionRequest;
 import com.osheeep.server.dinner.menu.dto.UpdateSelectionsRequest;
 import com.osheeep.server.dinner.recipe.dto.PublishRecipeRequest;
@@ -35,6 +37,7 @@ import com.osheeep.server.dinner.record.mapper.DinnerRecordDishSnapshotMapper;
 import java.math.BigDecimal;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -130,8 +133,8 @@ public class DinnerCustomRecipeMySqlIT {
                         "SELECT version FROM flyway_schema_history "
                                 + "WHERE success = 1 ORDER BY installed_rank DESC LIMIT 1",
                         String.class))
-                .as("the latest successful Flyway migration must be V7")
-                .isEqualTo("7");
+                .as("the latest successful Flyway migration must be V16")
+                .isEqualTo("16");
 
         systemRecipeCountBefore = count(
                 "SELECT COUNT(*) FROM dinner_recipes WHERE scope = 'SYSTEM'");
@@ -172,10 +175,16 @@ public class DinnerCustomRecipeMySqlIT {
         householdName = "recipe-it-household-" + suffix;
         householdId = insertHousehold(householdName, firstUserId);
         jdbcTemplate.update(
-                "INSERT INTO dinner_household_members (household_id, user_id) VALUES (?, ?)",
+                "INSERT INTO dinner_household_members "
+                        + "(household_id, user_id, role, status, seat_no, "
+                        + "history_visible_from) "
+                        + "VALUES (?, ?, 'OWNER', 'ACTIVE', 1, UTC_TIMESTAMP(3))",
                 householdId, firstUserId);
         jdbcTemplate.update(
-                "INSERT INTO dinner_household_members (household_id, user_id) VALUES (?, ?)",
+                "INSERT INTO dinner_household_members "
+                        + "(household_id, user_id, role, status, seat_no, "
+                        + "history_visible_from) "
+                        + "VALUES (?, ?, 'MEMBER', 'ACTIVE', 2, UTC_TIMESTAMP(3))",
                 householdId, secondUserId);
         householdIngredientName = "集成测试鸡蛋-" + suffix.substring(0, 8);
         householdIngredientId = insertHouseholdIngredient(householdIngredientName);
@@ -206,6 +215,10 @@ public class DinnerCustomRecipeMySqlIT {
                     householdId);
             jdbcTemplate.update(
                     "DELETE FROM dinner_cooking_records WHERE household_id = ?", householdId);
+            jdbcTemplate.update(
+                    "DELETE FROM dinner_menu_cooking_dishes WHERE menu_id IN "
+                            + "(SELECT id FROM dinner_menus WHERE household_id = ?)",
+                    householdId);
             jdbcTemplate.update(
                     "DELETE FROM dinner_menu_actions WHERE menu_id IN "
                             + "(SELECT id FROM dinner_menus WHERE household_id = ?)",
@@ -283,6 +296,92 @@ public class DinnerCustomRecipeMySqlIT {
                     .as("integration cleanup must leave approved image assets intact")
                     .isEqualTo(imageAssetCountBefore);
         }
+    }
+
+    @Test
+    void lightweightRecipeCompletesWithoutChangingInventory() throws Exception {
+        String token = token(firstUserId, firstUsername);
+        jdbcTemplate.update(
+                "INSERT INTO dinner_household_inventory "
+                        + "(household_id, ingredient_id, quantity, unit, version, updated_by) "
+                        + "VALUES (?, ?, 5.000, '枚', 1, ?)",
+                householdId,
+                householdIngredientId,
+                firstUserId);
+        Map<String, Object> inventoryBefore = jdbcTemplate.queryForMap(
+                "SELECT quantity, unit, version FROM dinner_household_inventory "
+                        + "WHERE household_id = ? AND ingredient_id = ?",
+                householdId,
+                householdIngredientId);
+
+        LightweightRecipe recipe = publishLightweightFamilyRecipe(token);
+        JsonNode discovered = discoveredRecipe(token, recipe.recipeId());
+        assertThat(discovered.path("imagePath").isNull()).isTrue();
+        assertThat(discovered.path("ingredients").isArray()).isTrue();
+        assertThat(discovered.path("ingredients").isEmpty()).isTrue();
+
+        JsonNode today = perform(token, get("/api/dinner/menus/today"), null);
+        JsonNode selected = perform(
+                token,
+                put("/api/dinner/menus/today/selections"),
+                new UpdateSelectionsRequest(
+                        List.of(recipe.recipeId()),
+                        today.at("/data/version").asLong()));
+        long menuId = selected.at("/data/id").asLong();
+        JsonNode started = perform(
+                token,
+                post("/api/dinner/menus/today/cooking/start"),
+                new StartCookingRequest(
+                        selected.at("/data/version").asLong(),
+                        UUID.randomUUID().toString()));
+        assertThat(started.at("/data/status").asText()).isEqualTo("COOKING");
+        long cookingDishId = started.at("/data/dishes/0/id").asLong();
+        assertThat(cookingDishId).isPositive();
+
+        JsonNode cooked = perform(
+                token,
+                put("/api/dinner/menus/today/cooking/dishes/{dishId}/completion",
+                        cookingDishId),
+                new UpdateCookingDishCompletionRequest(
+                        true, started.at("/data/version").asLong()));
+        JsonNode completed = perform(
+                token,
+                post("/api/dinner/menus/today/complete"),
+                new MenuActionRequest(
+                        cooked.at("/data/version").asLong(),
+                        UUID.randomUUID().toString()));
+        long recordId = completed.at("/data/recordId").asLong();
+        assertThat(recordId).isPositive();
+
+        JsonNode record = perform(
+                token, get("/api/dinner/records/{id}", recordId), null);
+        JsonNode dish = record.at("/data/dishes/0");
+        assertThat(dish.path("imagePath").isNull()).isTrue();
+        assertThat(dish.path("ingredients").isArray()).isTrue();
+        assertThat(dish.path("ingredients").isEmpty()).isTrue();
+        assertThat(dish.at("/method/steps/0/instruction").asText())
+                .isEqualTo("按家里习惯做即可");
+
+        Map<String, Object> inventoryAfter = jdbcTemplate.queryForMap(
+                "SELECT quantity, unit, version FROM dinner_household_inventory "
+                        + "WHERE household_id = ? AND ingredient_id = ?",
+                householdId,
+                householdIngredientId);
+        assertThat(inventoryAfter).isEqualTo(inventoryBefore);
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT COUNT(*) FROM dinner_menu_actions "
+                                + "WHERE menu_id = ? AND action_type = 'CONFIRM'",
+                        Integer.class,
+                        menuId))
+                .isZero();
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT COUNT(*) FROM dinner_menu_actions "
+                                + "WHERE menu_id = ? AND action_type = 'START_COOKING'",
+                        Integer.class,
+                        menuId))
+                .isOne();
+        verify(textSafetyGateway).check(
+                eq(firstOpenid), eq(recipeName), contains("按家里习惯做即可"));
     }
 
     @Test
@@ -577,11 +676,15 @@ public class DinnerCustomRecipeMySqlIT {
             request.contentType(MediaType.APPLICATION_JSON)
                     .content(objectMapper.writeValueAsBytes(body));
         }
-        String responseBody = mockMvc.perform(request)
-                .andExpect(status().isOk())
-                .andReturn()
-                .getResponse()
-                .getContentAsString();
+        var result = mockMvc.perform(request).andReturn();
+        if (result.getResponse().getStatus() != 200
+                && result.getResolvedException() != null) {
+            throw new AssertionError(
+                    "Expected successful integration response",
+                    result.getResolvedException());
+        }
+        assertThat(result.getResponse().getStatus()).isEqualTo(200);
+        String responseBody = result.getResponse().getContentAsString();
         JsonNode response = objectMapper.readTree(responseBody);
         assertThat(response.path("success").asBoolean()).isTrue();
         return response;
@@ -653,6 +756,39 @@ public class DinnerCustomRecipeMySqlIT {
         assertThat(((Number) publishedRow.get("version")).longValue()).isEqualTo(6L);
         assertThat(publishedRow.get("published_at")).isNotNull();
         return new PublishedRecipe(recipeId, methodId, ingredientId, listUrl);
+    }
+
+    private LightweightRecipe publishLightweightFamilyRecipe(String token) throws Exception {
+        JsonNode created = perform(token, post("/api/dinner/recipes/drafts"), null);
+        long recipeId = created.at("/data/id").asLong();
+        trackedRecipeIds.add(recipeId);
+        assertVersionAndStatus(created, 1, "DRAFT");
+
+        JsonNode basic = perform(
+                token,
+                put("/api/dinner/recipes/{id}/basic-info", recipeId),
+                new UpdateRecipeBasicInfoRequest(
+                        1L, recipeName, "荤菜", "常规", 2, 15));
+        assertVersionAndStatus(basic, 2, "DRAFT");
+
+        JsonNode method = perform(
+                token,
+                put("/api/dinner/recipes/{id}/default-method", recipeId),
+                new UpdateDefaultMethodRequest(
+                        2L,
+                        "默认做法",
+                        "家常",
+                        List.of(new RecipeMethodStepInput("按家里习惯做即可"))));
+        assertVersionAndStatus(method, 3, "DRAFT");
+        long methodId = method.at("/data/defaultMethod/id").asLong();
+        trackedMethodIds.add(methodId);
+
+        JsonNode published = perform(
+                token,
+                post("/api/dinner/recipes/{id}/publish", recipeId),
+                new PublishRecipeRequest(3L));
+        assertVersionAndStatus(published, 4, "PUBLISHED");
+        return new LightweightRecipe(recipeId, methodId);
     }
 
     private void addHouseholdInventory(long ingredientId) {
@@ -982,6 +1118,9 @@ public class DinnerCustomRecipeMySqlIT {
             long ingredientId,
             String listUrl
     ) {
+    }
+
+    private record LightweightRecipe(long recipeId, long methodId) {
     }
 
     private record ConfirmedMenu(long menuId, long version) {

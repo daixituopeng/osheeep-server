@@ -107,7 +107,7 @@ class DinnerRecipeDraftServiceTest {
         assertThat(result.defaultMethod()).isNull();
         assertThat(result.image()).isNull();
         assertThat(result.incompleteSteps())
-                .containsExactly("BASIC", "INGREDIENTS", "METHOD", "IMAGE");
+                .containsExactly("BASIC", "METHOD");
         verify(recipeMapper).insert(argThat((DinnerRecipeEntity row) ->
                 "HOUSEHOLD".equals(row.getScope())
                         && "DRAFT".equals(row.getStatus())

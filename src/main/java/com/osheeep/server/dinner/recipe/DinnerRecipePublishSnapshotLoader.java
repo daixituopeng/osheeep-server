@@ -49,7 +49,9 @@ public class DinnerRecipePublishSnapshotLoader {
         if (!issues.isEmpty()) {
             throw new RecipeValidationException(issues);
         }
-        imageAssetService.requireApproved(snapshot.imageAssetId());
+        if (snapshot.imageAssetId() != null) {
+            imageAssetService.requireApproved(snapshot.imageAssetId());
+        }
         return new RecipePublishSnapshot(
                 snapshot.recipeId(), snapshot.creatorId(), snapshot.householdId(), snapshot.version(),
                 snapshot.name(), snapshot.category(), snapshot.flavor(), snapshot.servings(),

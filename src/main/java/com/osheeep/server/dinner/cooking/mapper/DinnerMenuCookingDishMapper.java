@@ -13,19 +13,22 @@ import org.apache.ibatis.annotations.Update;
 public interface DinnerMenuCookingDishMapper
         extends BaseMapper<DinnerMenuCookingDishEntity> {
 
-    @Select("SELECT * FROM dinner_menu_cooking_dishes "
+    @Select("SELECT *, method_steps AS method_steps_json "
+            + "FROM dinner_menu_cooking_dishes "
             + "WHERE menu_id = #{menuId} ORDER BY sort_order, id")
     List<DinnerMenuCookingDishEntity> selectByMenuId(
             @Param("menuId") Long menuId);
 
-    @Select("SELECT * FROM dinner_menu_cooking_dishes "
+    @Select("SELECT *, method_steps AS method_steps_json "
+            + "FROM dinner_menu_cooking_dishes "
             + "WHERE menu_id = #{menuId} ORDER BY sort_order, id FOR UPDATE")
     List<DinnerMenuCookingDishEntity> selectByMenuIdForUpdate(
             @Param("menuId") Long menuId);
 
     @Select({
         "<script>",
-        "SELECT * FROM dinner_menu_cooking_dishes WHERE menu_id IN",
+        "SELECT *, method_steps AS method_steps_json",
+        "FROM dinner_menu_cooking_dishes WHERE menu_id IN",
         "<foreach collection=\"menuIds\" item=\"menuId\" open=\"(\" separator=\",\" close=\")\">",
         "#{menuId}",
         "</foreach>",

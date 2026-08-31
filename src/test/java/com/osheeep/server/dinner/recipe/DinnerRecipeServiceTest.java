@@ -26,6 +26,7 @@ import com.osheeep.server.dinner.recipe.dto.RecipeIngredientResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeMethodOptionResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeMethodStepResponse;
 import com.osheeep.server.dinner.recipe.dto.RecipeMethodSummaryResponse;
+import com.osheeep.server.dinner.recipe.dto.RecipeResponse;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipeEntity;
 import com.osheeep.server.dinner.recipe.entity.DinnerRecipePreferenceEntity;
 import com.osheeep.server.dinner.recipe.mapper.DinnerRecipeIngredientRow;
@@ -73,7 +74,7 @@ class DinnerRecipeServiceTest {
     }
 
     @Test
-    void discoversFromCurrentHouseholdWithBatchedRowsAndExactOrdering() {
+    void explicitInventoryDiscoveryKeepsMatchingOrder() {
         List<DinnerRecipeEntity> recipes = List.of(
                 systemRecipe(9L, "缺少九", 8),
                 systemRecipe(4L, "未知四", 30),
@@ -100,7 +101,7 @@ class DinnerRecipeServiceTest {
                 stock(70L, 104L, null, "克"),
                 stock(70L, 105L, null, "克")));
 
-        var result = service.discover(7L, Set.of(), Set.of(), false);
+        var result = service.discover(7L, Set.of(999L), Set.of(), false);
 
         assertThat(result).extracting(item -> item.id())
                 .containsExactly(1L, 5L, 2L, 3L, 4L, 6L, 9L);
@@ -119,6 +120,35 @@ class DinnerRecipeServiceTest {
         verify(recipeMapper).selectList(any());
         verify(catalogAssembler).assemble(recipes);
         verify(inventoryMapper).selectList(any());
+    }
+
+    @Test
+    void defaultDiscoveryOrdersByKindThenHouseholdScopeAndName() {
+        DinnerRecipeEntity familyMeat = householdRecipe(14L, 70L, 8L, 30);
+        familyMeat.setName("自家红烧肉");
+        familyMeat.setCategory("红烧肉");
+        DinnerRecipeEntity systemMeat = systemRecipe(1L, "白菜肉卷", 5);
+        systemMeat.setCategory("荤菜");
+        systemMeat.setFlavor("素");
+        DinnerRecipeEntity systemVegetable = systemRecipe(2L, "清炒时蔬", 10);
+        systemVegetable.setCategory("素菜");
+        systemVegetable.setFlavor("荤");
+        DinnerRecipeEntity unclassified = systemRecipe(3L, "蛋炒饭", 3);
+        List<DinnerRecipeEntity> recipes = List.of(
+                unclassified, systemVegetable, systemMeat, familyMeat);
+        List<DinnerRecipeIngredientRow> rows = List.of(
+                row(14L, 101L, "牛肉", "200", "克", true, 0));
+        when(authorizer.requireMembership(7L)).thenReturn(new RecipeAccess(7L, 70L));
+        when(recipeMapper.selectList(any())).thenReturn(recipes);
+        when(catalogAssembler.assemble(recipes)).thenReturn(catalog(recipes, rows));
+        when(inventoryMapper.selectList(any())).thenReturn(List.of());
+
+        var result = service.discover(7L, Set.of(), Set.of(), false);
+
+        assertThat(result).extracting(RecipeResponse::id)
+                .containsExactly(14L, 1L, 2L, 3L);
+        assertThat(result).extracting(item -> item.match().status())
+                .containsExactly("MISSING", "AVAILABLE", "AVAILABLE", "AVAILABLE");
     }
 
     @Test
@@ -169,7 +199,7 @@ class DinnerRecipeServiceTest {
     }
 
     @Test
-    void householdPreferenceBreaksEqualMatchTiesBeforeCookingTime() {
+    void explicitInventoryDiscoveryUsesPreferenceToBreakEqualMatchTies() {
         List<DinnerRecipeEntity> recipes = List.of(
                 systemRecipe(1L, "快但未表态", 5),
                 systemRecipe(2L, "双方喜欢", 30),
@@ -196,7 +226,7 @@ class DinnerRecipeServiceTest {
                 new DinnerRecipePreferenceAggregator());
 
         var result = preferenceAwareService.discover(
-                7L, Set.of(), Set.of(), false);
+                7L, Set.of(999L), Set.of(), false);
 
         assertThat(result).extracting(item -> item.id())
                 .containsExactly(2L, 1L, 3L);

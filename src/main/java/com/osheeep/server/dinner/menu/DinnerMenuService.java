@@ -67,6 +67,7 @@ public class DinnerMenuService {
     private final DinnerImageAssetService imageAssetService;
     private final DinnerRecipeCatalogAssembler catalogAssembler;
     private final DinnerHouseholdActorLabelService actorLabelService;
+    private final DinnerMenuMethodResolutionService methodResolutionService;
     private final BusinessDateResolver businessDateResolver;
     private final Clock clock;
     private DinnerNotificationPublisher notificationPublisher =
@@ -84,11 +85,13 @@ public class DinnerMenuService {
             DinnerImageAssetService imageAssetService,
             DinnerRecipeCatalogAssembler catalogAssembler,
             DinnerHouseholdActorLabelService actorLabelService,
+            DinnerMenuMethodResolutionService methodResolutionService,
             BusinessDateResolver businessDateResolver
     ) {
         this(householdAccessService, menuMapper, selectionMapper, actionMapper,
                 recipeMapper, methodMapper, imageAssetService, catalogAssembler,
-                actorLabelService, businessDateResolver, Clock.systemUTC());
+                actorLabelService, methodResolutionService,
+                businessDateResolver, Clock.systemUTC());
     }
 
     DinnerMenuService(
@@ -101,6 +104,7 @@ public class DinnerMenuService {
             DinnerImageAssetService imageAssetService,
             DinnerRecipeCatalogAssembler catalogAssembler,
             DinnerHouseholdActorLabelService actorLabelService,
+            DinnerMenuMethodResolutionService methodResolutionService,
             BusinessDateResolver businessDateResolver,
             Clock clock
     ) {
@@ -113,6 +117,7 @@ public class DinnerMenuService {
         this.imageAssetService = imageAssetService;
         this.catalogAssembler = catalogAssembler;
         this.actorLabelService = actorLabelService;
+        this.methodResolutionService = methodResolutionService;
         this.businessDateResolver = businessDateResolver;
         this.clock = clock;
     }
@@ -352,7 +357,7 @@ public class DinnerMenuService {
         if ("CONFIRMED".equals(menu.getStatus())) {
             return response(context, userId);
         }
-        resolveMethodConflicts(
+        methodResolutionService.resolveRequested(
                 menu.getId(), currentSelections,
                 requestedResolutions == null ? List.of() : requestedResolutions);
         menu.setStatus("CONFIRMED");
@@ -370,72 +375,6 @@ public class DinnerMenuService {
         return response(context, userId);
     }
 
-    private void resolveMethodConflicts(
-            Long menuId,
-            List<DinnerMenuSelectionEntity> selections,
-            List<MenuMethodResolutionRequest> requestedResolutions
-    ) {
-        Map<Long, Set<Long>> conflicts = methodConflicts(selections);
-        Map<Long, Long> resolutions = new LinkedHashMap<>();
-        for (MenuMethodResolutionRequest resolution : requestedResolutions) {
-            if (resolution == null
-                    || resolution.recipeId() == null
-                    || resolution.methodId() == null
-                    || resolutions.putIfAbsent(
-                            resolution.recipeId(), resolution.methodId()) != null) {
-                throw new BusinessException(
-                        ErrorCode.DINNER_MENU_METHOD_RESOLUTION_INVALID);
-            }
-        }
-        if (!conflicts.keySet().containsAll(resolutions.keySet())) {
-            throw new BusinessException(ErrorCode.DINNER_MENU_METHOD_RESOLUTION_INVALID);
-        }
-        if (!resolutions.keySet().containsAll(conflicts.keySet())) {
-            throw new BusinessException(ErrorCode.DINNER_MENU_METHOD_RESOLUTION_REQUIRED);
-        }
-        for (Map.Entry<Long, Long> resolution : resolutions.entrySet()) {
-            if (!conflicts.get(resolution.getKey()).contains(resolution.getValue())) {
-                throw new BusinessException(
-                        ErrorCode.DINNER_MENU_METHOD_RESOLUTION_INVALID);
-            }
-            selectionMapper.update(
-                    null,
-                    Wrappers.<DinnerMenuSelectionEntity>lambdaUpdate()
-                            .eq(DinnerMenuSelectionEntity::getMenuId, menuId)
-                            .eq(DinnerMenuSelectionEntity::getRecipeId, resolution.getKey())
-                            .set(DinnerMenuSelectionEntity::getMethodId, resolution.getValue()));
-        }
-    }
-
-    private Map<Long, Set<Long>> methodConflicts(
-            List<DinnerMenuSelectionEntity> selections
-    ) {
-        Map<Long, Long> versions = new LinkedHashMap<>();
-        Map<Long, Set<Long>> methods = new LinkedHashMap<>();
-        for (DinnerMenuSelectionEntity selection : selections) {
-            if (selection.getRecipeId() == null || selection.getRecipeVersion() == null) {
-                throw invalidRecipe();
-            }
-            Long previousVersion = versions.putIfAbsent(
-                    selection.getRecipeId(), selection.getRecipeVersion());
-            if (previousVersion != null
-                    && !previousVersion.equals(selection.getRecipeVersion())) {
-                throw invalidRecipe();
-            }
-            if (selection.getMethodId() != null) {
-                methods.computeIfAbsent(
-                                selection.getRecipeId(), ignored -> new LinkedHashSet<>())
-                        .add(selection.getMethodId());
-            }
-        }
-        Map<Long, Set<Long>> conflicts = new LinkedHashMap<>();
-        methods.forEach((recipeId, methodIds) -> {
-            if (methodIds.size() > 1) {
-                conflicts.put(recipeId, Set.copyOf(methodIds));
-            }
-        });
-        return Map.copyOf(conflicts);
-    }
 
     private DinnerMenuEntity createDraftLocked(Long householdId, LocalDate menuDate) {
         DinnerMenuEntity menu = new DinnerMenuEntity();
@@ -540,12 +479,13 @@ public class DinnerMenuService {
                     || !isMenuReadableHouseholdStatus(recipe.getStatus())
                     || !Objects.equals(recipe.getHouseholdId(), menu.getHouseholdId())
                     || recipeVersion <= 0
-                    || selectedMethodIds.contains(null)
-                    || recipe.getImageAssetId() == null) {
+                    || selectedMethodIds.contains(null)) {
                 throw invalidRecipe();
             }
             methodIds.addAll(selectedMethodIds);
-            imageAssetIds.add(recipe.getImageAssetId());
+            if (recipe.getImageAssetId() != null) {
+                imageAssetIds.add(recipe.getImageAssetId());
+            }
         }
 
         List<Long> distinctMethodIds = methodIds.stream().distinct().sorted().toList();
@@ -613,11 +553,13 @@ public class DinnerMenuService {
                 methodChoices = List.copyOf(choices);
                 methodConflict = methodChoices.size() > 1;
                 method = methodConflict ? null : methodChoices.getFirst().method();
-                ImageAssetResponse image = imagesById.get(recipe.getImageAssetId());
-                if (image == null || !StringUtils.hasText(image.listUrl())) {
-                    throw invalidRecipe();
+                if (recipe.getImageAssetId() != null) {
+                    ImageAssetResponse image = imagesById.get(recipe.getImageAssetId());
+                    if (image == null || !StringUtils.hasText(image.listUrl())) {
+                        throw invalidRecipe();
+                    }
+                    imagePath = image.listUrl();
                 }
-                imagePath = image.listUrl();
             }
             dishes.add(new MenuDishResponse(
                     recipe.getId(), recipe.getName(), imagePath, recipe.getCategory(),

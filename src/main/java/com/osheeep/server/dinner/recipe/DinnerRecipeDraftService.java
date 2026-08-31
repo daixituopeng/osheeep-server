@@ -78,7 +78,7 @@ public class DinnerRecipeDraftService {
                 draft.getName(), draft.getCategory(), draft.getFlavor(),
                 draft.getServings(), draft.getEstimatedMinutes(),
                 List.of(), null, null,
-                List.of("BASIC", "INGREDIENTS", "METHOD", "IMAGE"), null);
+                List.of("BASIC", "METHOD"), null);
     }
 
     @Transactional

@@ -880,6 +880,20 @@ class DinnerRecordServiceTest {
     }
 
     @Test
+    void explicitMinimalHouseholdSnapshotAllowsEmptyIngredientsAndImage() {
+        DinnerRecordDishSnapshotEntity snapshot = householdSnapshot();
+        snapshot.setImagePath(null);
+        snapshot.setIngredientsJson("[]");
+        stubDetail(snapshot);
+
+        var dish = service.detail(7L, 91L).dishes().getFirst();
+
+        assertThat(dish.scope()).isEqualTo("HOUSEHOLD");
+        assertThat(dish.imagePath()).isNull();
+        assertThat(dish.ingredients()).isEmpty();
+    }
+
+    @Test
     void malformedSnapshotJsonKeepsCodecFailureMessage() {
         DinnerRecordDishSnapshotEntity snapshot = householdSnapshot();
         snapshot.setIngredientsJson("{");
@@ -919,8 +933,6 @@ class DinnerRecordServiceTest {
                         snapshot -> snapshot.setMethodStepsJson("[]")),
                 new SnapshotCase("more than twelve method steps",
                         snapshot -> snapshot.setMethodStepsJson(stepsJson(13))),
-                new SnapshotCase("missing ingredients",
-                        snapshot -> snapshot.setIngredientsJson("[]")),
                 new SnapshotCase("ingredients without a required item",
                         snapshot -> snapshot.setIngredientsJson(
                                 "[{\"ingredientId\":101,\"name\":\"鸡蛋\","

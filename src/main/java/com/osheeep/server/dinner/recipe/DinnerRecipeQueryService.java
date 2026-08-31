@@ -220,15 +220,9 @@ public class DinnerRecipeQueryService {
         if (!basicComplete(recipe)) {
             incomplete.add("BASIC");
         }
-        if (aggregate.ingredientsByRecipe().getOrDefault(recipe.getId(), List.of()).isEmpty()) {
-            incomplete.add("INGREDIENTS");
-        }
         if (!methodComplete(defaultMethod(
                 aggregate.methodsByRecipe().getOrDefault(recipe.getId(), List.of())))) {
             incomplete.add("METHOD");
-        }
-        if (selectedImage(recipe, aggregate) == null) {
-            incomplete.add("IMAGE");
         }
         return List.copyOf(incomplete);
     }

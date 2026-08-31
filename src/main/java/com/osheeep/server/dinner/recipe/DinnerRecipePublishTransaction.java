@@ -75,7 +75,9 @@ public class DinnerRecipePublishTransaction {
             if (!issues.isEmpty()) {
                 throw new RecipeValidationException(issues);
             }
-            imageAssetService.requireApproved(draft.getImageAssetId());
+            if (draft.getImageAssetId() != null) {
+                imageAssetService.requireApproved(draft.getImageAssetId());
+            }
             draft.setStatus("PUBLISHED");
             draft.setPublishedAt(LocalDateTime.now());
             draft.setLastModifiedBy(userId);

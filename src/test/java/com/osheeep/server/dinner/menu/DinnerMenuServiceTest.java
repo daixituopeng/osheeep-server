@@ -116,6 +116,7 @@ class DinnerMenuServiceTest {
                 imageAssetService,
                 catalogAssembler,
                 actorLabelService,
+                new DinnerMenuMethodResolutionService(selectionMapper),
                 new BusinessDateResolver(),
                 clock);
         service.setRecordMapper(recordMapper);
@@ -401,6 +402,28 @@ class DinnerMenuServiceTest {
         });
         assertThat(result.consensusCount()).isEqualTo(1);
         assertThat(result.historyVisible()).isTrue();
+    }
+
+    @Test
+    void todayKeepsMinimalHouseholdRecipeWithoutImageVisible() {
+        DinnerMenuEntity menu = menu(31L);
+        DinnerRecipeEntity family = publishedHouseholdRecipe(14L, 11L, 8L, null);
+        stubTodayContext(menu);
+        when(selectionMapper.selectList(any())).thenReturn(List.of(
+                householdSelection(31L, 7L, 14L, 8L, 21L)));
+        when(recipeMapper.selectByIds(List.of(14L))).thenReturn(List.of(family));
+        when(methodMapper.selectByIds(List.of(21L)))
+                .thenReturn(List.of(method(21L, 14L, "默认做法", "家常")));
+
+        var result = service.today(7L);
+
+        assertThat(result.dishes()).singleElement().satisfies(dish -> {
+            assertThat(dish.recipeId()).isEqualTo(14L);
+            assertThat(dish.imagePath()).isNull();
+            assertThat(dish.method())
+                    .isEqualTo(new RecipeMethodSummaryResponse(21L, "默认做法", "家常"));
+        });
+        verifyNoInteractions(imageAssetService);
     }
 
     @Test

@@ -166,7 +166,7 @@ class DinnerFamilyRecipeControllerTest {
                 .andExpect(jsonPath("$.data.defaultMethod").doesNotExist())
                 .andExpect(jsonPath("$.data.image").doesNotExist())
                 .andExpect(jsonPath("$.data.incompleteSteps[0]").value("BASIC"))
-                .andExpect(jsonPath("$.data.incompleteSteps[3]").value("IMAGE"));
+                .andExpect(jsonPath("$.data.incompleteSteps[1]").value("METHOD"));
         verify(draftService).create(7L);
     }
 
@@ -484,7 +484,7 @@ class DinnerFamilyRecipeControllerTest {
         return new RecipeDraftResponse(
                 101L, "DRAFT", version, null, null, null, null, null,
                 List.of(), null, null,
-                List.of("BASIC", "INGREDIENTS", "METHOD", "IMAGE"), null);
+                List.of("BASIC", "METHOD"), null);
     }
 
     private RecipeDraftResponse completeDraft() {

@@ -198,6 +198,28 @@ class DinnerRecordSnapshotAssemblerTest {
     }
 
     @Test
+    void currentMinimalHouseholdRecipeAllowsNoImageAndNoIngredients() {
+        DinnerRecipeEntity family = householdRecipe(14L, 70L, 8L, 2, null);
+        DinnerRecipeMethodEntity defaultMethod =
+                method(21L, 14L, "默认做法", "家常");
+        defaultMethod.setIsDefault(true);
+        when(recipeMapper.selectByIdsForUpdate(List.of(14L))).thenReturn(List.of(family));
+        when(ingredientMapper.selectWithIngredientNames(List.of(14L)))
+                .thenReturn(List.of());
+        when(methodMapper.selectByRecipeIdsForUpdate(List.of(14L)))
+                .thenReturn(List.of(defaultMethod));
+        when(stepMapper.selectByMethodIdsForUpdate(List.of(21L))).thenReturn(List.of(
+                step(301L, 21L, "按家里习惯做即可", 0)));
+
+        var draft = assembler.assembleCurrentRecipe(70L, 7L, 14L, null);
+
+        assertThat(draft.imagePath()).isNull();
+        assertThat(draft.ingredients()).isEmpty();
+        assertThat(draft.methodId()).isEqualTo(21L);
+        verifyNoInteractions(imageAssetService);
+    }
+
+    @Test
     void currentRecipeAddRejectsAnotherHouseholdsRecipeBeforeAggregateReads() {
         DinnerRecipeEntity foreign = householdRecipe(14L, 71L, 8L, 2, 91L);
         when(recipeMapper.selectByIdsForUpdate(List.of(14L))).thenReturn(List.of(foreign));

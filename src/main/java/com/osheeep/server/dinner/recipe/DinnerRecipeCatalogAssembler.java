@@ -265,7 +265,8 @@ public final class DinnerRecipeCatalogAssembler {
         }
         ImageAssetResponse image = recipe.getImageAssetId() == null
                 ? null : imagesById.get(recipe.getImageAssetId());
-        boolean invalidImage = image == null || !StringUtils.hasText(image.listUrl());
+        boolean invalidImage = recipe.getImageAssetId() != null
+                && (image == null || !StringUtils.hasText(image.listUrl()));
         if (!issues.isEmpty() || invalidImage) {
             List<String> issueFields = issues.stream()
                     .map(RecipeValidationIssue::field)
@@ -291,7 +292,7 @@ public final class DinnerRecipeCatalogAssembler {
                 .toList();
         return new CatalogEntry(
                 recipe,
-                image.listUrl(),
+                image == null ? null : image.listUrl(),
                 ingredients,
                 new RecipeMethodSummaryResponse(
                         method.getId(), method.getName(), method.getCookingStyle()),

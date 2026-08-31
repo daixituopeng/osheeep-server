@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.List;
+import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 import org.junit.jupiter.api.Test;
 
@@ -16,6 +17,9 @@ class DinnerCookingPersistenceContractTest {
     private static final Path V15 = Path.of(
             "src/main/resources/db/migration/"
                     + "V15__add_menu_cooking_dish_snapshots.sql");
+    private static final Path V16 = Path.of(
+            "src/main/resources/db/migration/"
+                    + "V16__allow_empty_cooking_ingredients.sql");
 
     @Test
     void v15AddsFrozenCookingRowsAndRecordOriginWithoutLiveActorForeignKeys()
@@ -68,6 +72,17 @@ class DinnerCookingPersistenceContractTest {
                 "selectByMenuIdForUpdate", Long.class)).isNotNull();
         assertThat(DinnerMenuCookingDishMapper.class.getMethod(
                 "selectByMenuIdsForUpdate", List.class)).isNotNull();
+        for (var method : List.of(
+                DinnerMenuCookingDishMapper.class.getMethod(
+                        "selectByMenuId", Long.class),
+                DinnerMenuCookingDishMapper.class.getMethod(
+                        "selectByMenuIdForUpdate", Long.class),
+                DinnerMenuCookingDishMapper.class.getMethod(
+                        "selectByMenuIdsForUpdate", List.class))) {
+            Select select = method.getAnnotation(Select.class);
+            assertThat(String.join(" ", select.value()).toLowerCase())
+                    .contains("method_steps as method_steps_json");
+        }
 
         Update mark = DinnerMenuCookingDishMapper.class.getMethod(
                         "markCompleted", Long.class, Long.class,
@@ -84,5 +99,19 @@ class DinnerCookingPersistenceContractTest {
                 .contains("set completed_by = null, completed_at = null")
                 .contains("id = #{dishid}")
                 .contains("menu_id = #{menuid}");
+    }
+
+    @Test
+    void v16AllowsEmptyIngredientArraysWithoutWeakeningOtherSnapshotChecks()
+            throws Exception {
+        String sql = Files.readString(V16).toLowerCase().replaceAll("\\s+", " ");
+
+        assertThat(sql)
+                .contains("alter table dinner_menu_cooking_dishes")
+                .contains("drop check ck_dinner_cooking_dishes_snapshot")
+                .contains("add constraint ck_dinner_cooking_dishes_snapshot")
+                .contains("json_type(ingredients) = 'array'")
+                .contains("json_length(selected_by_user_ids) > 0")
+                .doesNotContain("json_length(ingredients) > 0");
     }
 }

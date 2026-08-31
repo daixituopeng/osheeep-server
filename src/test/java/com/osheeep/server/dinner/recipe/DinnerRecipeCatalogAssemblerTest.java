@@ -111,6 +111,24 @@ class DinnerRecipeCatalogAssemblerTest {
                 ingredientMapper, methodMapper, stepMapper, imageAssetService);
     }
 
+    @Test
+    void includesMinimalHouseholdRecipeWithoutImageOrIngredients() {
+        DinnerRecipeEntity household = householdRecipe(14L, 70L, 8L, null);
+        when(ingredientMapper.selectWithIngredientNames(List.of(14L)))
+                .thenReturn(List.of());
+        when(methodMapper.selectList(any())).thenReturn(List.of(
+                method(21L, 14L, "默认做法", "家常")));
+        when(stepMapper.selectList(any())).thenReturn(List.of(
+                step(31L, 21L, "按家里习惯做即可", 0)));
+
+        var entries = assembler.assemble(List.of(household));
+
+        assertThat(entries).containsOnlyKeys(14L);
+        assertThat(entries.get(14L).imagePath()).isNull();
+        assertThat(entries.get(14L).ingredients()).isEmpty();
+        verifyNoMoreInteractions(imageAssetService);
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("damagedPublishedHouseholdAggregates")
     void omitsDamagedHouseholdAggregateWithoutLeakingDraftFields(

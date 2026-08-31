@@ -115,6 +115,10 @@ public class DinnerRecipeService {
                 .collect(Collectors.toMap(
                         DinnerHouseholdInventoryEntity::getIngredientId,
                         item -> new Stock(item.getQuantity(), item.getUnit())));
+        Comparator<RecipeResponse> order = hasInventoryDiscoveryIntent(
+                includeIngredientIds, excludeIngredientIds, onlyCookable)
+                ? inventoryDiscoveryOrder()
+                : defaultDiscoveryOrder();
 
         return recipes.stream()
                 .map(recipe -> catalog.get(recipe.getId()))
@@ -126,7 +130,7 @@ public class DinnerRecipeService {
                         excludeIngredientIds,
                         preferences.get(entry.recipe().getId())))
                 .filter(response -> !onlyCookable || !"MISSING".equals(response.match().status()))
-                .sorted(discoveryOrder())
+                .sorted(order)
                 .toList();
     }
 
@@ -224,7 +228,17 @@ public class DinnerRecipeService {
         return matchCalculator.calculate(requirements, effectiveStock);
     }
 
-    private Comparator<RecipeResponse> discoveryOrder() {
+    private Comparator<RecipeResponse> defaultDiscoveryOrder() {
+        return Comparator.comparingInt(DinnerRecipeService::dishKindRank)
+                .thenComparingInt(response ->
+                        "HOUSEHOLD".equals(response.scope()) ? 0 : 1)
+                .thenComparing(
+                        RecipeResponse::name,
+                        Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(RecipeResponse::id);
+    }
+
+    private Comparator<RecipeResponse> inventoryDiscoveryOrder() {
         return Comparator.comparingInt((RecipeResponse response) ->
                         statusRank(response.match().status()))
                 .thenComparing(
@@ -235,6 +249,34 @@ public class DinnerRecipeService {
                         RecipeResponse::estimatedMinutes,
                         Comparator.nullsLast(Comparator.naturalOrder()))
                 .thenComparing(RecipeResponse::id);
+    }
+
+    private static boolean hasInventoryDiscoveryIntent(
+            Set<Long> includeIngredientIds,
+            Set<Long> excludeIngredientIds,
+            boolean onlyCookable
+    ) {
+        return onlyCookable
+                || !includeIngredientIds.isEmpty()
+                || !excludeIngredientIds.isEmpty();
+    }
+
+    private static int dishKindRank(RecipeResponse response) {
+        if ("荤菜".equals(response.category())) {
+            return 0;
+        }
+        if ("素菜".equals(response.category())) {
+            return 1;
+        }
+        String text = (response.category() == null ? "" : response.category())
+                + (response.flavor() == null ? "" : response.flavor());
+        if (text.contains("素") && !text.contains("荤")) {
+            return 1;
+        }
+        if (text.contains("荤") || text.contains("肉")) {
+            return 0;
+        }
+        return 2;
     }
 
     private static int statusRank(String status) {

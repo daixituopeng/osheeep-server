@@ -158,8 +158,12 @@ public final class DinnerRecordSnapshotAssembler {
             List<RecordIngredientSnapshotResponse> ingredients =
                     ingredientsByRecipe.getOrDefault(recipeId, List.of());
             validateBasics(recipe);
-            if (ingredients.stream().noneMatch(
-                    RecordIngredientSnapshotResponse::required)) {
+            boolean missingRequiredIngredients = ingredients.stream().noneMatch(
+                    RecordIngredientSnapshotResponse::required);
+            if (("SYSTEM".equals(recipe.getScope()) && missingRequiredIngredients)
+                    || ("HOUSEHOLD".equals(recipe.getScope())
+                            && !ingredients.isEmpty()
+                            && missingRequiredIngredients)) {
                 throw invalidRecipe();
             }
 
@@ -186,15 +190,19 @@ public final class DinnerRecordSnapshotAssembler {
                     || steps.size() > MAX_STEPS) {
                 throw invalidRecipe();
             }
-            ImageAssetResponse image = imagesById.get(recipe.getImageAssetId());
-            if (image == null
-                    || !StringUtils.hasText(image.listUrl())
-                    || image.listUrl().length() > MAX_IMAGE_PATH_LENGTH) {
-                throw invalidRecipe();
+            String imagePath = null;
+            if (recipe.getImageAssetId() != null) {
+                ImageAssetResponse image = imagesById.get(recipe.getImageAssetId());
+                if (image == null
+                        || !StringUtils.hasText(image.listUrl())
+                        || image.listUrl().length() > MAX_IMAGE_PATH_LENGTH) {
+                    throw invalidRecipe();
+                }
+                imagePath = image.listUrl();
             }
             drafts.add(new SnapshotDraft(
                     recipeId, "HOUSEHOLD", identity.recipeVersion(), recipe.getName(),
-                    image.listUrl(), recipe.getCategory(), recipe.getFlavor(),
+                    imagePath, recipe.getCategory(), recipe.getFlavor(),
                     recipe.getServings(), recipe.getEstimatedMinutes(),
                     selectorsByRecipe.get(recipeId), method.getId(), method.getName(),
                     method.getCookingStyle(), method.getEstimatedMinutes(), steps, ingredients));
@@ -465,7 +473,6 @@ public final class DinnerRecordSnapshotAssembler {
                 || identity.recipeVersion() <= 0
                 || !matchesHouseholdSelectionVersion(recipe, identity.recipeVersion())
                 || identity.methodId() == null
-                || recipe.getImageAssetId() == null
                 || recipe.getServings() == null
                 || recipe.getServings() < 1
                 || recipe.getServings() > 20) {

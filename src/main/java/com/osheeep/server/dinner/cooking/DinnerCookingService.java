@@ -17,6 +17,7 @@ import com.osheeep.server.dinner.household.DinnerHouseholdAccessService.LockedHo
 import com.osheeep.server.dinner.household.DinnerHouseholdActorLabelService;
 import com.osheeep.server.dinner.household.dto.HouseholdActorResponse;
 import com.osheeep.server.dinner.menu.BusinessDateResolver;
+import com.osheeep.server.dinner.menu.DinnerMenuMethodResolutionService;
 import com.osheeep.server.dinner.menu.entity.DinnerMenuActionEntity;
 import com.osheeep.server.dinner.menu.entity.DinnerMenuEntity;
 import com.osheeep.server.dinner.menu.entity.DinnerMenuSelectionEntity;
@@ -50,6 +51,7 @@ public class DinnerCookingService {
 
     private final DinnerHouseholdAccessService householdAccessService;
     private final DinnerHouseholdActorLabelService actorLabelService;
+    private final DinnerMenuMethodResolutionService methodResolutionService;
     private final DinnerMenuMapper menuMapper;
     private final DinnerMenuSelectionMapper selectionMapper;
     private final DinnerMenuActionMapper actionMapper;
@@ -64,6 +66,7 @@ public class DinnerCookingService {
     public DinnerCookingService(
             DinnerHouseholdAccessService householdAccessService,
             DinnerHouseholdActorLabelService actorLabelService,
+            DinnerMenuMethodResolutionService methodResolutionService,
             DinnerMenuMapper menuMapper,
             DinnerMenuSelectionMapper selectionMapper,
             DinnerMenuActionMapper actionMapper,
@@ -73,7 +76,8 @@ public class DinnerCookingService {
             DinnerCookingSnapshotCodec snapshotCodec,
             BusinessDateResolver businessDateResolver
     ) {
-        this(householdAccessService, actorLabelService, menuMapper, selectionMapper,
+        this(householdAccessService, actorLabelService, methodResolutionService,
+                menuMapper, selectionMapper,
                 actionMapper, cookingDishMapper, recordMapper, snapshotAssembler, snapshotCodec,
                 businessDateResolver, Clock.systemUTC());
     }
@@ -81,6 +85,7 @@ public class DinnerCookingService {
     DinnerCookingService(
             DinnerHouseholdAccessService householdAccessService,
             DinnerHouseholdActorLabelService actorLabelService,
+            DinnerMenuMethodResolutionService methodResolutionService,
             DinnerMenuMapper menuMapper,
             DinnerMenuSelectionMapper selectionMapper,
             DinnerMenuActionMapper actionMapper,
@@ -93,6 +98,7 @@ public class DinnerCookingService {
     ) {
         this.householdAccessService = householdAccessService;
         this.actorLabelService = actorLabelService;
+        this.methodResolutionService = methodResolutionService;
         this.menuMapper = menuMapper;
         this.selectionMapper = selectionMapper;
         this.actionMapper = actionMapper;
@@ -114,13 +120,23 @@ public class DinnerCookingService {
             return response(userId, context.access(), menu, cookingDishes(menu.getId()));
         }
         requireVersion(menu, request.version());
-        if (!"CONFIRMED".equals(menu.getStatus())) {
+        boolean autoConfirm = "DRAFT".equals(menu.getStatus());
+        if (!autoConfirm && !"CONFIRMED".equals(menu.getStatus())) {
             throw new BusinessException(ErrorCode.DINNER_MENU_NOT_CONFIRMED);
         }
 
         List<DinnerMenuSelectionEntity> selections = selectionMapper.selectList(
                 Wrappers.<DinnerMenuSelectionEntity>lambdaQuery()
                         .eq(DinnerMenuSelectionEntity::getMenuId, menu.getId()));
+        if (selections.isEmpty()) {
+            throw new BusinessException(ErrorCode.DINNER_MENU_EMPTY);
+        }
+        if (autoConfirm) {
+            methodResolutionService.resolveAutomatically(
+                    menu.getId(), selections, userId);
+            menu.setConfirmedBy(userId);
+            menu.setConfirmedAt(now());
+        }
         List<DinnerRecordSnapshotAssembler.SnapshotDraft> drafts =
                 snapshotAssembler.assemble(context.access().householdId(), selections);
         if (drafts.isEmpty() || drafts.size() > MAX_DISHES) {

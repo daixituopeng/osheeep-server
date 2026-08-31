@@ -158,22 +158,22 @@ public final class DinnerCookingSnapshotCodec {
                 || draft.recipeId() == null
                 || draft.recipeId() <= 0
                 || !StringUtils.hasText(draft.name())
-                || !StringUtils.hasText(draft.imagePath())
                 || !StringUtils.hasText(draft.category())
                 || !StringUtils.hasText(draft.flavor())
                 || draft.estimatedMinutes() == null
                 || draft.estimatedMinutes() <= 0
                 || draft.ingredients() == null
-                || draft.ingredients().isEmpty()
-                || draft.ingredients().stream().noneMatch(
-                        RecordIngredientSnapshotResponse::required)
                 || draft.selectedByUserIds() == null
                 || draft.selectedByUserIds().isEmpty()
                 || draft.selectedByUserIds().size() > 2) {
             throw invalidSnapshot();
         }
+        boolean hasRequiredIngredient = draft.ingredients().stream().anyMatch(
+                RecordIngredientSnapshotResponse::required);
         boolean system = "SYSTEM".equals(draft.scope())
                 && Objects.equals(draft.recipeVersion(), 1L)
+                && StringUtils.hasText(draft.imagePath())
+                && hasRequiredIngredient
                 && draft.methodId() == null
                 && !StringUtils.hasText(draft.methodName())
                 && !StringUtils.hasText(draft.cookingStyle())
@@ -182,6 +182,7 @@ public final class DinnerCookingSnapshotCodec {
         boolean household = "HOUSEHOLD".equals(draft.scope())
                 && draft.recipeVersion() != null
                 && draft.recipeVersion() > 0
+                && (draft.ingredients().isEmpty() || hasRequiredIngredient)
                 && draft.servings() != null
                 && draft.servings() >= 1
                 && draft.servings() <= 20
@@ -192,8 +193,25 @@ public final class DinnerCookingSnapshotCodec {
                 && !draft.steps().isEmpty()
                 && draft.steps().size() <= 12;
         if (!system && !household) {
-            throw invalidSnapshot();
+            throw invalidSnapshot(draft);
         }
+    }
+
+    private IllegalStateException invalidSnapshot(
+            DinnerRecordSnapshotAssembler.SnapshotDraft draft
+    ) {
+        return new IllegalStateException(INVALID_SNAPSHOT
+                + " [scope=" + draft.scope()
+                + ", version=" + draft.recipeVersion()
+                + ", image=" + StringUtils.hasText(draft.imagePath())
+                + ", ingredients=" + draft.ingredients().size()
+                + ", servings=" + draft.servings()
+                + ", methodId=" + draft.methodId()
+                + ", methodName=" + StringUtils.hasText(draft.methodName())
+                + ", cookingStyle=" + StringUtils.hasText(draft.cookingStyle())
+                + ", methodMinutes=" + draft.methodEstimatedMinutes()
+                + ", steps=" + draft.steps().size()
+                + "]");
     }
 
     private IllegalStateException invalidSnapshot() {

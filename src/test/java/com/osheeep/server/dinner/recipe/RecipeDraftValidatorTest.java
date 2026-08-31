@@ -30,9 +30,7 @@ class RecipeDraftValidatorTest {
                         tuple("BASIC", "flavor", "请填写口味"),
                         tuple("BASIC", "servings", "请填写份量"),
                         tuple("BASIC", "estimatedMinutes", "请填写预计耗时"),
-                        tuple("INGREDIENTS", "ingredients", "至少添加一种必需食材"),
-                        tuple("METHOD", "defaultMethod", "请填写默认做法"),
-                        tuple("IMAGE", "imageAssetId", "请选择一张已审核真实图片"));
+                        tuple("METHOD", "defaultMethod", "请填写默认做法"));
     }
 
     @Test
@@ -65,6 +63,17 @@ class RecipeDraftValidatorTest {
                 .containsExactly(
                         tuple("INGREDIENTS", "ingredients"),
                         tuple("INGREDIENTS", "ingredients[0].unit"));
+    }
+
+    @Test
+    void allowsPublishWithoutIngredientsOrImage() {
+        assertThat(validator.validate(snapshot(
+                "番茄炒蛋", "荤菜", "常规", 2, 15,
+                List.of(),
+                new RecipeMethodResponse(
+                        201L, "默认做法", "家常",
+                        List.of(new RecipeMethodStepResponse("按家里习惯做即可", 0))),
+                null))).isEmpty();
     }
 
     @Test

@@ -26,9 +26,6 @@ public class RecipeDraftValidator {
         validateBasic(snapshot, issues);
         validateIngredients(snapshot.ingredients(), issues);
         validateMethod(snapshot.defaultMethod(), issues);
-        if (snapshot.imageAssetId() == null) {
-            issues.add(issue("IMAGE", "imageAssetId", "请选择一张已审核真实图片"));
-        }
         return List.copyOf(issues);
     }
 
@@ -64,7 +61,7 @@ public class RecipeDraftValidator {
         List<RecipeIngredientResponse> safeIngredients =
                 ingredients == null ? List.of() : ingredients;
         boolean hasRequired = safeIngredients.stream().anyMatch(RecipeIngredientResponse::required);
-        if (!hasRequired) {
+        if (!safeIngredients.isEmpty() && !hasRequired) {
             issues.add(issue("INGREDIENTS", "ingredients", "至少添加一种必需食材"));
         }
         if (safeIngredients.size() > MAX_INGREDIENTS) {

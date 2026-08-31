@@ -100,7 +100,9 @@ public class DinnerRecipeRevisionTransaction {
             if (!issues.isEmpty()) {
                 throw new RecipeValidationException(issues);
             }
-            imageAssetService.requireApproved(draft.getImageAssetId());
+            if (draft.getImageAssetId() != null) {
+                imageAssetService.requireApproved(draft.getImageAssetId());
+            }
 
             List<DinnerRecipeIngredientEntity> lockedIngredients =
                     ingredientMapper.selectByRecipeIdsForUpdate(lockIds);

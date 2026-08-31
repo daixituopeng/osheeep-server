@@ -508,7 +508,7 @@ public class DinnerRecordService {
                 || !StringUtils.hasText(snapshot.getMethodName())
                 || !StringUtils.hasText(snapshot.getCookingStyle())
                 || !validSteps(steps)
-                || !validIngredients(ingredients)) {
+                || !validOptionalIngredients(ingredients)) {
             throw incompleteSnapshot();
         }
     }
@@ -539,6 +539,14 @@ public class DinnerRecordService {
     private boolean validIngredients(List<RecordIngredientSnapshotResponse> ingredients) {
         return !ingredients.isEmpty()
                 && ingredients.stream().anyMatch(
+                        RecordIngredientSnapshotResponse::required);
+    }
+
+    private boolean validOptionalIngredients(
+            List<RecordIngredientSnapshotResponse> ingredients
+    ) {
+        return ingredients.isEmpty()
+                || ingredients.stream().anyMatch(
                         RecordIngredientSnapshotResponse::required);
     }
 

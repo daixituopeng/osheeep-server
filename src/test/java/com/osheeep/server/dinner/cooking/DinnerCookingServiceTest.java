@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -26,6 +27,7 @@ import com.osheeep.server.dinner.household.DinnerHouseholdAccessService.LockedHo
 import com.osheeep.server.dinner.household.DinnerHouseholdActorLabelService;
 import com.osheeep.server.dinner.household.dto.HouseholdActorResponse;
 import com.osheeep.server.dinner.menu.BusinessDateResolver;
+import com.osheeep.server.dinner.menu.DinnerMenuMethodResolutionService;
 import com.osheeep.server.dinner.menu.entity.DinnerMenuActionEntity;
 import com.osheeep.server.dinner.menu.entity.DinnerMenuEntity;
 import com.osheeep.server.dinner.menu.entity.DinnerMenuSelectionEntity;
@@ -79,6 +81,7 @@ class DinnerCookingServiceTest {
     void setUp() {
         MapperBuilderAssistant assistant =
                 new MapperBuilderAssistant(new MybatisConfiguration(), "test");
+        TableInfoHelper.initTableInfo(assistant, DinnerMenuSelectionEntity.class);
         TableInfoHelper.initTableInfo(assistant, DinnerMenuCookingDishEntity.class);
         TableInfoHelper.initTableInfo(assistant, DinnerCookingRecordEntity.class);
         ObjectMapper objectMapper = new ObjectMapper();
@@ -97,7 +100,9 @@ class DinnerCookingServiceTest {
                                 getArgument(1).get(userId))
                         .toList());
         service = new DinnerCookingService(
-                householdAccessService, actorLabelService, menuMapper, selectionMapper,
+                householdAccessService, actorLabelService,
+                new DinnerMenuMethodResolutionService(selectionMapper),
+                menuMapper, selectionMapper,
                 actionMapper, cookingDishMapper, recordMapper, snapshotAssembler,
                 snapshotCodec, new BusinessDateResolver(), clock);
     }
@@ -152,6 +157,106 @@ class DinnerCookingServiceTest {
         verify(actionMapper).insert(action.capture());
         assertThat(action.getValue().getActionType()).isEqualTo("START_COOKING");
         assertThat(action.getValue().getIdempotencyKey()).isEqualTo(START_KEY);
+    }
+
+    @Test
+    void startAutoConfirmsDraftAndResolvesMethodConflictInOneVersionStep() {
+        DinnerMenuEntity menu = menu("DRAFT", 4L);
+        stubLockedToday(menu);
+        DinnerMenuSelectionEntity mine = selection(7L, 14L, 8L, 22L);
+        DinnerMenuSelectionEntity partner = selection(8L, 14L, 8L, 21L);
+        List<DinnerMenuSelectionEntity> selections = List.of(mine, partner);
+        when(actionMapper.selectOne(any())).thenReturn(null);
+        when(selectionMapper.selectList(any())).thenReturn(selections);
+        when(snapshotAssembler.assemble(11L, selections)).thenAnswer(invocation -> {
+            assertThat(selections)
+                    .extracting(DinnerMenuSelectionEntity::getMethodId)
+                    .containsOnly(22L);
+            return List.of(householdDraft(14L, Set.of(7L, 8L)));
+        });
+        when(cookingDishMapper.selectByMenuIdForUpdate(31L)).thenReturn(List.of());
+        when(cookingDishMapper.insert(any(DinnerMenuCookingDishEntity.class)))
+                .thenAnswer(invocation -> {
+                    invocation.<DinnerMenuCookingDishEntity>getArgument(0).setId(101L);
+                    return 1;
+                });
+        when(menuMapper.updateById(menu)).thenReturn(1);
+        when(actionMapper.insert(any(DinnerMenuActionEntity.class))).thenReturn(1);
+        when(cookingDishMapper.selectByMenuId(31L)).thenAnswer(invocation -> {
+            ArgumentCaptor<DinnerMenuCookingDishEntity> inserted =
+                    ArgumentCaptor.forClass(DinnerMenuCookingDishEntity.class);
+            verify(cookingDishMapper).insert(inserted.capture());
+            return List.of(inserted.getValue());
+        });
+
+        var result = service.start(7L, new StartCookingRequest(4L, START_KEY));
+
+        assertThat(result.status()).isEqualTo("COOKING");
+        assertThat(result.version()).isEqualTo(5L);
+        assertThat(menu.getConfirmedBy()).isEqualTo(7L);
+        assertThat(menu.getConfirmedAt())
+                .isEqualTo(LocalDateTime.of(2026, 8, 13, 11, 0));
+        verify(selectionMapper, times(1)).update(any(), any());
+        ArgumentCaptor<DinnerMenuActionEntity> action =
+                ArgumentCaptor.forClass(DinnerMenuActionEntity.class);
+        verify(actionMapper).insert(action.capture());
+        assertThat(action.getValue().getActionType()).isEqualTo("START_COOKING");
+    }
+
+    @Test
+    void startRejectsEmptyDraftBeforeSnapshotOrActionWrites() {
+        DinnerMenuEntity menu = menu("DRAFT", 4L);
+        stubLockedToday(menu);
+        when(actionMapper.selectOne(any())).thenReturn(null);
+        when(selectionMapper.selectList(any())).thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.start(
+                7L, new StartCookingRequest(4L, START_KEY)))
+                .isInstanceOfSatisfying(BusinessException.class, error ->
+                        assertThat(error.errorCode()).isEqualTo(ErrorCode.DINNER_MENU_EMPTY));
+
+        verifyNoInteractions(snapshotAssembler);
+        verify(cookingDishMapper, never())
+                .insert(any(DinnerMenuCookingDishEntity.class));
+        verify(menuMapper, never()).updateById(any(DinnerMenuEntity.class));
+        verify(actionMapper, never()).insert(any(DinnerMenuActionEntity.class));
+    }
+
+    @Test
+    void startFreezesMinimalHouseholdDishWithoutImageOrIngredients() {
+        DinnerMenuEntity menu = menu("CONFIRMED", 5L);
+        stubLockedToday(menu);
+        DinnerMenuSelectionEntity selection = new DinnerMenuSelectionEntity();
+        selection.setMenuId(31L);
+        selection.setUserId(7L);
+        selection.setRecipeId(14L);
+        when(actionMapper.selectOne(any())).thenReturn(null);
+        when(selectionMapper.selectList(any())).thenReturn(List.of(selection));
+        DinnerRecordSnapshotAssembler.SnapshotDraft minimal =
+                minimalHouseholdDraft(14L, Set.of(7L));
+        when(snapshotAssembler.assemble(11L, List.of(selection)))
+                .thenReturn(List.of(minimal));
+        when(cookingDishMapper.selectByMenuIdForUpdate(31L)).thenReturn(List.of());
+        when(cookingDishMapper.insert(any(DinnerMenuCookingDishEntity.class)))
+                .thenAnswer(invocation -> {
+                    invocation.<DinnerMenuCookingDishEntity>getArgument(0).setId(101L);
+                    return 1;
+                });
+        when(menuMapper.updateById(menu)).thenReturn(1);
+        when(actionMapper.insert(any(DinnerMenuActionEntity.class))).thenReturn(1);
+        when(cookingDishMapper.selectByMenuId(31L)).thenAnswer(invocation -> {
+            ArgumentCaptor<DinnerMenuCookingDishEntity> inserted =
+                    ArgumentCaptor.forClass(DinnerMenuCookingDishEntity.class);
+            verify(cookingDishMapper).insert(inserted.capture());
+            return List.of(inserted.getValue());
+        });
+
+        var result = service.start(7L, new StartCookingRequest(5L, START_KEY));
+
+        assertThat(result.dishes()).singleElement().satisfies(dish -> {
+            assertThat(dish.imagePath()).isNull();
+            assertThat(dish.ingredients()).isEmpty();
+        });
     }
 
     @Test
@@ -569,6 +674,21 @@ class DinnerCookingServiceTest {
         return row;
     }
 
+    private DinnerMenuSelectionEntity selection(
+            Long userId,
+            Long recipeId,
+            Long recipeVersion,
+            Long methodId
+    ) {
+        DinnerMenuSelectionEntity selection = new DinnerMenuSelectionEntity();
+        selection.setMenuId(31L);
+        selection.setUserId(userId);
+        selection.setRecipeId(recipeId);
+        selection.setRecipeVersion(recipeVersion);
+        selection.setMethodId(methodId);
+        return selection;
+    }
+
     private DinnerRecordSnapshotAssembler.SnapshotDraft systemDraft(
             Long recipeId,
             Set<Long> selectors
@@ -593,5 +713,17 @@ class DinnerCookingServiceTest {
                 List.of(new RecordMethodStepSnapshotResponse("翻炒至熟", 0)),
                 List.of(new RecordIngredientSnapshotResponse(
                         201L, "鸡蛋", new BigDecimal("2.000"), "枚", true, 0)));
+    }
+
+    private DinnerRecordSnapshotAssembler.SnapshotDraft minimalHouseholdDraft(
+            Long recipeId,
+            Set<Long> selectors
+    ) {
+        return new DinnerRecordSnapshotAssembler.SnapshotDraft(
+                recipeId, "HOUSEHOLD", 8L, "番茄炒蛋", null,
+                "荤菜", "家常", 2, 15, selectors,
+                21L, "默认做法", "家常", 15,
+                List.of(new RecordMethodStepSnapshotResponse("按家里习惯做即可", 0)),
+                List.of());
     }
 }

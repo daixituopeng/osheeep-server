@@ -168,7 +168,7 @@ class DinnerRecipeQueryServiceTest {
 
         assertThat(queryService.list(7L, FamilyRecipeTab.DRAFT))
                 .extracting(FamilyRecipeListItemResponse::completedStep)
-                .containsExactly("BASIC", "INGREDIENTS", "METHOD", "IMAGE", "PREVIEW");
+                .containsExactly("BASIC", "METHOD", "METHOD", "PREVIEW", "PREVIEW");
 
         verify(ingredientMapper).selectWithIngredientNames(List.of(101L, 102L, 103L, 104L, 105L));
         verify(methodMapper).selectList(any());
@@ -193,7 +193,7 @@ class DinnerRecipeQueryServiceTest {
                 queryService.list(7L, FamilyRecipeTab.DRAFT);
 
         assertThat(result).singleElement().satisfies(item -> {
-            assertThat(item.completedStep()).isEqualTo("IMAGE");
+            assertThat(item.completedStep()).isEqualTo("PREVIEW");
             assertThat(item.imageUrl()).isNull();
         });
         verify(imageAssetService).findApprovedByIds(List.of(8L));
@@ -430,7 +430,7 @@ class DinnerRecipeQueryServiceTest {
         RecipeDraftResponse result = queryService.detail(7L, 101L);
 
         assertThat(result.image()).isNull();
-        assertThat(result.incompleteSteps()).containsExactly("IMAGE");
+        assertThat(result.incompleteSteps()).isEmpty();
         verify(imageAssetService).findApprovedByIds(List.of(8L));
     }
 
@@ -449,7 +449,7 @@ class DinnerRecipeQueryServiceTest {
         RecipeDraftResponse result = queryService.detail(7L, 101L);
 
         assertThat(result.incompleteSteps())
-                .containsExactly("BASIC", "INGREDIENTS", "METHOD");
+                .containsExactly("BASIC", "METHOD");
     }
 
     private void stubActiveMembership(Long userId, Long householdId) {

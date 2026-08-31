@@ -55,7 +55,7 @@ import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 
 /**
- * Guarded MySQL 8 acceptance coverage for V15 and the cooking transaction boundaries.
+ * Guarded MySQL 8 acceptance coverage for V15/V16 and the cooking transaction boundaries.
  *
  * <p>This class is intentionally named {@code *MySqlIT}, so an ordinary {@code mvn test} does not
  * select it. It must be run explicitly with a loopback-only disposable base catalog whose raw
@@ -107,7 +107,7 @@ public class DinnerCookingV15MySqlIT {
         migrate(harness, dataSource, catalog, null);
 
         JdbcTemplate jdbc = new JdbcTemplate(dataSource);
-        assertLatestSuccessfulVersion(jdbc, "15");
+        assertLatestSuccessfulVersion(jdbc, "16");
         assertV15Schema(jdbc, catalog);
     }
 
@@ -124,7 +124,7 @@ public class DinnerCookingV15MySqlIT {
 
         migrate(harness, dataSource, catalog, null);
 
-        assertLatestSuccessfulVersion(jdbc, "15");
+        assertLatestSuccessfulVersion(jdbc, "16");
         assertV15Schema(jdbc, catalog);
         assertThat(jdbc.queryForObject(
                         "SELECT origin FROM dinner_record_dish_snapshots WHERE id = ?",
@@ -140,7 +140,7 @@ public class DinnerCookingV15MySqlIT {
         String catalog = harness.v6Catalog();
         DataSource migrationDataSource = harness.dataSourceFor(catalog);
         migrate(harness, migrationDataSource, catalog, null);
-        assertLatestSuccessfulVersion(new JdbcTemplate(migrationDataSource), "15");
+        assertLatestSuccessfulVersion(new JdbcTemplate(migrationDataSource), "16");
 
         String businessJdbcUrl = jdbcUrlForCatalog(baseJdbcUrl, catalog);
         try (ConfigurableApplicationContext context = startBusinessContext(

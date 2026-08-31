@@ -96,6 +96,43 @@ class DinnerRecipePublicationBoundaryTest {
     }
 
     @Test
+    void minimalRecipePublishesWithoutImageOrIngredients() {
+        RecipeAccess readAccess = new RecipeAccess(7L, 70L);
+        DinnerRecipeEntity minimalDraft = draft();
+        minimalDraft.setImageAssetId(null);
+        RecipeDraftResponse minimal = new RecipeDraftResponse(
+                101L, "DRAFT", 4L, "番茄炒蛋", "荤菜", "家常", 2, 15,
+                List.of(),
+                new RecipeMethodResponse(
+                        201L, "默认做法", "家常",
+                        List.of(new RecipeMethodStepResponse("按家里习惯做即可", 0))),
+                null, List.of(), null);
+        RecipeDraftResponse published = new RecipeDraftResponse(
+                101L, "PUBLISHED", 5L, minimal.name(), minimal.category(),
+                minimal.flavor(), minimal.servings(), minimal.estimatedMinutes(),
+                minimal.ingredients(), minimal.defaultMethod(), null, List.of(), null);
+        when(authorizer.requireMembership(7L)).thenReturn(readAccess);
+        when(authorizer.requireOwnedDraft(readAccess, 101L)).thenReturn(minimalDraft);
+        when(queryService.detail(readAccess, 101L))
+                .thenReturn(minimal, minimal, published);
+        WechatUserIdentityEntity identity = new WechatUserIdentityEntity();
+        identity.setUserId(7L);
+        identity.setOpenid("openid-7");
+        when(identityMapper.selectOne(any())).thenReturn(identity);
+        when(gateway.check(any(), any(), any())).thenReturn(DinnerTextSafetyResult.PASS);
+        when(recipeMapper.selectByIdForUpdate(101L)).thenReturn(minimalDraft);
+        when(authorizer.requireMembershipForUpdate(7L))
+                .thenReturn(new RecipeAccess(7L, 70L));
+        when(recipeMapper.updateById(any(DinnerRecipeEntity.class))).thenReturn(1);
+
+        assertThat(publicationService.publish(7L, 101L, 4L).status())
+                .isEqualTo("PUBLISHED");
+
+        verify(imageAssetService, never()).requireApproved(any());
+        assertThat(transactionManager.commits()).isEqualTo(1);
+    }
+
+    @Test
     void duplicateKeyFromTheTransactionRollsBackWithoutCommit() {
         prepareValidPublish();
         when(gateway.check(any(), any(), any())).thenAnswer(invocation -> {
